@@ -3812,6 +3812,76 @@ describe('Bilan de fin de journée et messages d’équipe', () => {
   });
 });
 
+describe('Guide « Bien démarrer »', () => {
+  it('avance avec les données de la structure, étapes manuelles et masquage', async () => {
+    const t = await newTenant(app);
+    type State = {
+      steps: { key: string; done: boolean; manual: boolean }[];
+      dismissed: boolean;
+      completed: boolean;
+    };
+    const state = async () =>
+      (await t.admin.api.get('/onboarding').expect(200)).body as State;
+    const done = (s: State) =>
+      Object.fromEntries(s.steps.map((x) => [x.key, x.done]));
+
+    let s = await state();
+    expect(s.steps[0]).toEqual({
+      key: 'prerequisites',
+      done: false,
+      manual: true,
+    });
+    expect(s.steps.at(-1)?.key).toBe('first_day');
+    expect(s.steps.every((x) => !x.done)).toBe(true);
+    expect(s.dismissed).toBe(false);
+
+    const zone = await t.createZone('Plateau', PLATEAU, { capacity: 10 });
+    const agent = await t.createUser('agent');
+    s = await state();
+    expect(done(s)).toMatchObject({ zones: true, agents: true, app: true });
+    expect(done(s).first_day).toBe(false);
+
+    await agent.api.post('/zone-requests', { zoneId: zone.id }).expect(201);
+    await agent.api.post('/days/start').expect(200);
+    expect(done(await state()).first_day).toBe(true);
+
+    await t.admin.api
+      .patch('/onboarding', { step: 'prerequisites', done: true })
+      .expect(200);
+    s = (
+      await t.admin.api
+        .patch('/onboarding', { step: 'settings', done: true })
+        .expect(200)
+    ).body as State;
+    expect(done(s)).toMatchObject({ prerequisites: true, settings: true });
+    await t.admin.api
+      .patch('/onboarding', { step: 'settings', done: false })
+      .expect(200);
+    expect(done(await state()).settings).toBe(false);
+
+    // Les étapes déduites des données ne se cochent pas à la main.
+    await t.admin.api
+      .patch('/onboarding', { step: 'zones', done: true })
+      .expect(400);
+    await t.admin.api.patch('/onboarding', { step: 'settings' }).expect(400);
+
+    s = (
+      await t.admin.api.patch('/onboarding', { dismissed: true }).expect(200)
+    ).body as State;
+    expect(s.dismissed).toBe(true);
+
+    // Réservé à l'administrateur, et propre à chaque structure.
+    const lead = await t.createUser('team_lead');
+    await lead.api.get('/onboarding').expect(403);
+    await agent.api.get('/onboarding').expect(403);
+    const other = await newTenant(app, 'Autre');
+    const fresh = (await other.admin.api.get('/onboarding').expect(200))
+      .body as State;
+    expect(fresh.dismissed).toBe(false);
+    expect(fresh.steps.every((x) => !x.done)).toBe(true);
+  });
+});
+
 describe('Support et documentation', () => {
   async function platformApi() {
     const email = uniqueEmail('sa-support');

@@ -1,3 +1,4 @@
+import { OnboardingModule } from './onboarding/onboarding.module';
 import { ReportsModule } from './reports/reports.module';
 import { ExportsModule } from './exports/exports.module';
 import { DocsModule } from './docs/docs.module';
@@ -69,6 +70,7 @@ import { ZonesModule } from './zones/zones.module';
     SupportModule,
     ExportsModule,
     ReportsModule,
+    OnboardingModule,
     DocsModule,
     ZoneRequestsModule,
     DaysModule,
