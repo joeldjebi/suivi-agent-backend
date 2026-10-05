@@ -7,6 +7,8 @@ export interface DefaultArticle {
   summary: string;
   audience: DocAudience[];
   body: string;
+  /** Rang dans le manuel ; sinon d'après l'ordre de la liste (10, 20, 30…) */
+  position?: number;
 }
 
 const STAFF: DocAudience[] = ['admin', 'team_lead'];
@@ -39,7 +41,58 @@ export const DEFAULT_ARTICLES: DefaultArticle[] = [
 
 ## Par où commencer ?
 
-Si vous êtes administrateur, suivez l’article **Mettre en place votre structure**. Si vous êtes chef d’équipe, commencez par **La carte en temps réel** et **Les alertes**.`,
+Commencez par l’article **Avant de commencer : les prérequis**. Si vous êtes administrateur, suivez ensuite **Mettre en place votre structure**. Si vous êtes chef d’équipe, commencez par **La carte en temps réel** et **Les alertes**.`,
+  },
+  {
+    slug: 'prerequis',
+    section: 'Prise en main',
+    title: 'Avant de commencer : les prérequis',
+    summary:
+      'Le matériel, les informations et les réglages à préparer avant le premier jour.',
+    audience: STAFF,
+    position: 15,
+    body: `Préparez ces éléments avant de lancer votre première équipe : la mise en route ne prend ensuite qu’une heure.
+
+## Le matériel
+
+- **Un ordinateur avec un navigateur récent** (Chrome, Edge, Firefox ou Safari, à jour) pour le back-office : administrateurs et chefs d’équipe. Un écran d’au moins 13 pouces est conseillé pour la carte.
+- **Un smartphone par agent**, avec une **puce et un forfait data** actifs :
+  - Android 7.0 ou plus récent, ou iPhone sous iOS 13 ou plus récent ;
+  - **un GPS qui fonctionne** (testez une application de carte avant le premier jour) ;
+  - au moins **500 Mo d’espace libre** et une batterie en bon état. Une batterie externe est conseillée pour les longues journées.
+- **Un smartphone pour chaque chef d’équipe** qui suit son équipe sur le terrain (même configuration).
+
+## Les informations à rassembler
+
+- **La liste de vos agents** : prénom, nom et **numéro de téléphone** de chacun. Le numéro sert d’identifiant de connexion : il doit être unique et rester le même (l’agent ne peut pas le modifier lui-même).
+- **La liste des chefs d’équipe**, avec leur numéro et leur adresse e-mail.
+- **Vos secteurs de travail** : quartiers ou zones, avec, si besoin, le nombre maximum d’agents par zone.
+- **L’organisation de vos équipes** (selon votre formule) : quel chef, quels agents, quelles zones.
+- **Vos horaires** : heure de début attendue, jours travaillés, heure de fin de journée.
+- **Vos formulaires de terrain** (si vous utilisez les missions) : les informations que l’agent doit noter à chaque visite (nom du commerce, montant, choix…).
+- **Vos règles de rémunération** (formule Entreprise) : fixe, montant par journée, par formulaire, primes et retenues.
+
+## Le compte administrateur
+
+- Une **adresse e-mail** valide et un **mot de passe d’au moins 8 caractères**, gardé confidentiel.
+- Créez le compte depuis la page d’inscription : l’essai gratuit ouvre toutes les fonctionnalités.
+
+## Les réglages des téléphones des agents
+
+À faire une fois, sur chaque téléphone, avec l’agent :
+
+1. **Installer l’application** Suivi Agent (lien fourni par votre administrateur) et se connecter avec son numéro.
+2. **Autoriser la localisation « Toujours »** (et pas seulement « pendant l’utilisation ») : sans cela, le suivi s’arrête quand l’écran s’éteint.
+3. **Autoriser les notifications** : alertes de sortie de zone, messages du chef, réponses aux demandes.
+4. **Désactiver l’économie de batterie pour Suivi Agent** (Android : Paramètres → Batterie → Suivi Agent → Non restreinte) : sinon le téléphone coupe le suivi.
+5. Laisser **la date et l’heure en automatique**.
+
+## Informer vos équipes
+
+- Expliquez à vos agents **quand leur position est partagée** : uniquement pendant leur journée de travail, jamais en dehors (et pas pendant la pause, sauf réglage contraire).
+- Faites un **essai d’une demi-journée** avec un ou deux agents avant de généraliser.
+
+> Une question avant de commencer ? Écrivez-nous depuis le menu **Support**.`,
   },
   {
     slug: 'mettre-en-place',

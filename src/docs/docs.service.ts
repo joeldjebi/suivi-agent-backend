@@ -44,7 +44,7 @@ export class DocsService {
           a.summary,
           a.body,
           a.audience,
-          (i + 1) * 10,
+          a.position ?? (i + 1) * 10,
         ],
       );
     }
