@@ -1,0 +1,298 @@
+import type { DocAudience } from '@suivi/shared';
+
+export interface DefaultArticle {
+  slug: string;
+  section: string;
+  title: string;
+  summary: string;
+  audience: DocAudience[];
+  body: string;
+}
+
+const STAFF: DocAudience[] = ['admin', 'team_lead'];
+const ADMIN: DocAudience[] = ['admin'];
+
+/**
+ * Manuel d'utilisation par défaut. Il décrit les écrans et les gestes, jamais le
+ * fonctionnement interne. L'éditeur le modifie depuis sa console.
+ */
+export const DEFAULT_ARTICLES: DefaultArticle[] = [
+  {
+    slug: 'bienvenue',
+    section: 'Prise en main',
+    title: 'Bienvenue sur Suivi Agent',
+    summary:
+      'Les rôles, le back-office et l’application mobile en deux minutes.',
+    audience: STAFF,
+    body: `Suivi Agent vous aide à organiser et suivre vos équipes sur le terrain : où elles travaillent, ce qu’elles font, et ce qui demande votre attention.
+
+## Trois rôles
+
+- **Administrateur** : configure la structure (zones, groupes, utilisateurs, paramètres, abonnement) et voit tout.
+- **Chef d’équipe** : suit son équipe en direct, valide les demandes de zone, crée des missions et traite les alertes.
+- **Agent** : démarre sa journée dans sa zone depuis l’application mobile, remplit les formulaires de ses missions.
+
+## Deux outils
+
+- **Le back-office** (ce site) : pour les administrateurs et les chefs d’équipe, sur ordinateur.
+- **L’application mobile** : pour les agents, et pour les chefs d’équipe sur le terrain.
+
+## Par où commencer ?
+
+Si vous êtes administrateur, suivez l’article **Mettre en place votre structure**. Si vous êtes chef d’équipe, commencez par **La carte en temps réel** et **Les alertes**.`,
+  },
+  {
+    slug: 'mettre-en-place',
+    section: 'Prise en main',
+    title: 'Mettre en place votre structure',
+    summary:
+      'Les étapes pour être opérationnel : zones, équipes, comptes, réglages.',
+    audience: ADMIN,
+    body: `Comptez une heure pour une première mise en place.
+
+1. **Dessinez vos zones** (menu *Zones*) : les secteurs où vos agents travaillent. Indiquez une capacité si vous voulez limiter le nombre d’agents par zone.
+2. **Créez vos groupes** (menu *Groupes*, selon votre formule) : une équipe, son chef et les zones auxquelles elle a accès.
+3. **Ajoutez les utilisateurs** (menu *Utilisateurs*) : chefs d’équipe et agents. Les agents se connectent à l’application avec leur **numéro de téléphone** et le mot de passe que vous leur communiquez.
+4. **Réglez les paramètres** (menu *Paramètres*) : validation des zones, heure de remise à zéro, alertes des responsables.
+5. **Personnalisez l’application** (menu *Application mobile*, selon votre formule) : logo, couleurs, message d’accueil.
+6. **Faites installer l’application** à vos agents et testez une première journée avec l’un d’eux.
+
+> Conseil : commencez avec une équipe pilote d’une semaine avant d’étendre à toute la structure.`,
+  },
+  {
+    slug: 'carte-temps-reel',
+    section: 'Terrain',
+    title: 'La carte en temps réel',
+    summary: 'Voir qui est en journée, où, et qui demande votre attention.',
+    audience: STAFF,
+    body: `La carte affiche les agents en journée et leurs zones. Elle se met à jour toute seule.
+
+## Lire la carte
+
+- **Pastille verte** : journée en cours. **Orange** : en pause. **Rouge** : une alerte (signal perdu, hors zone, immobile, batterie faible…).
+- Les compteurs en haut de la liste filtrent d’un clic : *En cours*, *En pause*, *Alertes*.
+- Filtrez par groupe, par zone ou cherchez un agent par son nom.
+
+## La fiche d’un agent
+
+Cliquez sur un agent pour ouvrir sa fiche : zone, heure de début, dernière position, batterie, précision du GPS. Le bouton **Voir le trajet** affiche son itinéraire de la journée.
+
+## Bon à savoir
+
+- Un agent n’apparaît pas tant qu’il n’a pas démarré sa journée.
+- Pendant la pause, la position n’est pas partagée, sauf si votre structure l’a choisi (*Paramètres*).
+- « Signal perdu » signifie que le téléphone n’envoie plus de position : GPS coupé, application fermée ou absence de réseau. Les positions enregistrées hors connexion arrivent dès le retour du réseau.`,
+  },
+  {
+    slug: 'alertes',
+    section: 'Terrain',
+    title: 'Les alertes',
+    summary: 'Les situations à surveiller, et comment les prendre en charge.',
+    audience: STAFF,
+    body: `Le menu *Alertes* rassemble les situations qui demandent l’attention d’un responsable. Le chef de l’agent est prévenu dès qu’une alerte s’ouvre ; elle se referme d’elle-même quand la situation se règle.
+
+## Les types d’alertes
+
+- **Signal perdu** : plus aucune position depuis le délai réglé.
+- **Hors zone** : l’agent est sorti de sa zone au-delà du délai d’alerte. Une marge évite les fausses alertes en bordure.
+- **Immobile** : pas de déplacement notable depuis un moment (hors pause).
+- **Batterie faible** : le suivi risque de s’arrêter, prévenez l’agent.
+- **Position simulée** : une application de fausse position GPS est utilisée.
+- **Journée pas démarrée** : après l’heure de début attendue (à régler dans *Paramètres*).
+
+## Prendre en charge
+
+Cliquez sur **Je m’en occupe** et notez ce que vous avez fait (« Appelé : en rendez-vous client »). Les autres responsables voient que l’alerte est suivie. L’onglet *Refermées* garde l’historique des 7 derniers jours.
+
+> Les seuils (délai, rayon, batterie) se règlent dans *Paramètres → Alertes des responsables*.`,
+  },
+  {
+    slug: 'demandes-de-zone',
+    section: 'Terrain',
+    title: 'Les demandes de zone',
+    summary: 'Valider, refuser ou réaffecter les agents dans les zones.',
+    audience: STAFF,
+    body: `Avant de démarrer sa journée, l’agent choisit une zone. Selon vos paramètres, la demande est acceptée automatiquement ou attend la validation de son responsable.
+
+## Valider une demande
+
+Le menu *Demandes de zone* liste les demandes en attente, avec leur délai d’expiration. **Accepter** confirme la place ; **Refuser** demande un motif, que l’agent voit.
+
+## Réaffecter un agent
+
+Le bouton **Réaffecter** déplace un agent vers une autre zone, même en cours de journée. Seul un administrateur peut dépasser la capacité d’une zone complète.
+
+## Expiration
+
+Une demande sans réponse expire au bout du délai réglé dans *Paramètres* : l’action prévue (accepter ou refuser) s’applique alors automatiquement.`,
+  },
+  {
+    slug: 'journees',
+    section: 'Terrain',
+    title: 'Historique des journées et trajets',
+    summary: 'Heures de début et de fin, pauses, trajets et sorties de zone.',
+    audience: STAFF,
+    body: `Le menu *Historique des journées* liste les journées de vos agents : début, pauses, fin et zone.
+
+## Le trajet d’une journée
+
+Cliquez sur **Trajet** : la carte montre l’itinéraire, le départ, la dernière position et les points hors zone ou simulés. En dessous, la liste des **sorties de zone** indique l’heure de sortie et de retour, la durée, la distance maximale et si le responsable a été prévenu.
+
+## Journées oubliées
+
+Si votre structure l’a choisi, les journées encore ouvertes sont terminées automatiquement à l’heure de remise à zéro.`,
+  },
+  {
+    slug: 'zones',
+    section: 'Organisation',
+    title: 'Les zones',
+    summary: 'Dessiner les secteurs de travail et fixer leur capacité.',
+    audience: STAFF,
+    body: `Une zone est un secteur dessiné sur la carte où un agent travaille pendant sa journée.
+
+- **Créer** : cliquez sur *Nouvelle zone*, puis dessinez le contour point par point sur la carte. Deux zones ne peuvent pas se chevaucher.
+- **Capacité** : nombre maximum d’agents en même temps. Laissez vide pour ne pas limiter.
+- **Zone sensible** : peut demander une validation manuelle, même en mode mixte.
+- **Désactiver** : la zone n’est plus proposée, son historique est conservé.
+
+Les agents ne voient que les zones auxquelles leur groupe a accès.`,
+  },
+  {
+    slug: 'equipes-et-comptes',
+    section: 'Organisation',
+    title: 'Groupes et utilisateurs',
+    summary: 'Organiser les équipes, créer les comptes, gérer les accès.',
+    audience: ADMIN,
+    body: `## Groupes
+
+Un groupe réunit des agents, leur chef d’équipe et les zones auxquelles ils ont accès. Le chef valide les demandes de son groupe et en reçoit les alertes. Sans groupe, les chefs d’équipe supervisent toute la structure.
+
+## Utilisateurs
+
+- Créez un compte par personne. Les agents et chefs se connectent à l’application avec leur **numéro de téléphone** ; ils ne peuvent pas le modifier eux-mêmes.
+- **Désactiver** un compte bloque la connexion sans perdre l’historique.
+- Le nombre d’agents actifs compte dans votre abonnement (menu *Agents actifs*).`,
+  },
+  {
+    slug: 'missions',
+    section: 'Organisation',
+    title: 'Les missions',
+    summary: 'Fixer des objectifs et recueillir des formulaires du terrain.',
+    audience: STAFF,
+    body: `Une mission fixe un objectif à un agent ou à un groupe, avec une échéance.
+
+## Types de missions
+
+Un type définit le formulaire que l’agent remplit à chaque visite ou action (texte, nombre, choix, photo…). Les administrateurs les créent dans *Types de missions*.
+
+## Mesurer la progression
+
+- **Nombre de formulaires** : chaque formulaire accepté compte pour 1.
+- **Somme d’un champ** : par exemple le total des montants encaissés.
+- **Validation manuelle** : le responsable déclare l’objectif atteint ou non.
+
+## Suivre et corriger
+
+Sur le détail de la mission : progression, contribution de chaque agent et formulaires reçus. Un formulaire incorrect peut être **rejeté** avec un motif : l’agent est prévenu et il ne compte plus.`,
+  },
+  {
+    slug: 'remuneration',
+    section: 'Organisation',
+    title: 'La rémunération',
+    summary: 'Grilles, rémunération par mission, paie de la période.',
+    audience: STAFF,
+    body: `La rémunération est calculée automatiquement à partir de l’activité réelle. **Aucun paiement ne passe par la plateforme** : vous exportez la paie, payez par vos moyens habituels, puis la marquez payée.
+
+## Grilles
+
+Une grille définit ce que gagne une personne : fixe, montant par journée validée, par formulaire accepté, commission, primes d’objectif, prime d’équipe pour les chefs, retenues et plafond. Elle s’applique à un rôle, un groupe ou une personne.
+
+## Rémunération propre à une mission
+
+Par défaut, une mission suit la grille de chaque agent. Un administrateur peut lui donner des **conditions propres** (prix par formulaire, commission, paliers de prime) qui remplacent la grille pour cette mission. Les agents voient sur la mission ce qu’elle leur rapporte.
+
+## Paie de la période
+
+À la fin de la période, la paie est calculée en brouillon. Les chefs peuvent proposer des primes ou retenues ; l’administrateur les accepte, valide la paie puis la marque payée. Chaque agent voit ses gains dans l’application.`,
+  },
+  {
+    slug: 'parametres',
+    section: 'Administration',
+    title: 'Les paramètres de la structure',
+    summary: 'Validation des zones, journée de travail, suivi, alertes.',
+    audience: ADMIN,
+    body: `Chaque paramètre a une valeur par défaut raisonnable ; ajustez-les à votre fonctionnement.
+
+- **Validation des zones** : automatique, manuelle ou mixte (selon le taux de remplissage, les zones sensibles, les changements de zone…).
+- **Journée de travail** : zone obligatoire pour démarrer, suivi pendant la pause (désactivé par défaut pour la vie privée), heure de remise à zéro, fin automatique des journées oubliées.
+- **Suivi et données** : délai « signal perdu », marge autour des zones, délai d’alerte de sortie de zone, durée de conservation des positions.
+- **Alertes des responsables** : activez chaque alerte et réglez ses seuils. L’alerte « journée pas démarrée » demande une heure de début et les jours travaillés.
+
+Les modifications s’appliquent immédiatement, y compris dans l’application mobile.`,
+  },
+  {
+    slug: 'abonnement',
+    section: 'Administration',
+    title: 'Abonnement et factures',
+    summary: 'Formule, agents inclus, factures.',
+    audience: ADMIN,
+    body: `Le menu *Abonnement* montre votre formule, ce qu’elle inclut, le nombre de chefs et d’agents inclus, et vos factures.
+
+- **Changer de formule** : les fonctionnalités s’ouvrent aussitôt (cadenas dans le menu sinon).
+- **Agents supplémentaires** : au-delà des agents inclus, chaque agent actif est facturé selon votre formule.
+- **Essai gratuit** : toutes les fonctionnalités sont ouvertes pendant l’essai.
+
+Pour une question de facturation, écrivez au support (menu *Support*, catégorie « Facturation »).`,
+  },
+  {
+    slug: 'application-agent',
+    section: 'Application mobile',
+    title: 'L’application pour les agents',
+    summary: 'Journée, zone, missions et gains depuis le téléphone.',
+    audience: ['admin', 'team_lead', 'agent'],
+    body: `## Démarrer sa journée
+
+1. Choisir sa zone (validée automatiquement ou par le responsable).
+2. Appuyer sur **Démarrer** : la position est partagée jusqu’à la fin de la journée.
+3. **Pause** et **Terminer** depuis le même écran.
+
+## Ma zone
+
+La carte de l’écran *Ma journée* montre la zone et la position de l’agent. Si l’agent sort de sa zone, il est averti tout de suite sur son téléphone, puis son responsable est prévenu au-delà du délai réglé.
+
+## Missions et gains
+
+L’onglet *Missions* liste les objectifs et permet de remplir les formulaires, même sans réseau : ils partent dès que la connexion revient. Si votre formule l’inclut, *Mes gains* montre l’estimation de la période et l’historique des paies.
+
+> L’application doit avoir l’autorisation de localisation « Toujours » pour que le suivi continue écran éteint.`,
+  },
+  {
+    slug: 'application-chef',
+    section: 'Application mobile',
+    title: 'L’application pour les chefs d’équipe',
+    summary: 'L’équipe en direct, la carte, les demandes et les alertes.',
+    audience: STAFF,
+    body: `Le chef d’équipe retrouve l’essentiel du back-office sur son téléphone :
+
+- **Mon équipe** : agents en journée, en pause, à surveiller, et pas encore partis (avec appel direct).
+- **Carte** : positions, zones, itinéraire du jour d’un agent, styles de carte.
+- **Demandes** : valider ou refuser les demandes de zone.
+- **Alertes** : une carte par agent avec ses alertes ; *Je m’en occupe*, carte et appel depuis la fiche.
+- **Missions** : créer, modifier, désactiver une mission ; suivre les formulaires de l’équipe.
+- **Gains de l’équipe** : estimation de la période et propositions de prime ou de retenue.`,
+  },
+  {
+    slug: 'support',
+    section: 'Aide',
+    title: 'Contacter le support',
+    summary: 'Poser une question ou signaler un problème.',
+    audience: STAFF,
+    body: `Le menu *Support* vous permet d’écrire à l’équipe Suivi Agent.
+
+1. Cliquez sur **Nouvelle demande**, choisissez une catégorie (question, problème, facturation, suggestion…) et décrivez la situation.
+2. Vous êtes prévenu dès que le support répond ; la réponse apparaît dans le fil de la demande.
+3. Répondez dans le même fil pour préciser ou relancer, puis **fermez** la demande une fois réglée.
+
+Pour être aidé plus vite : indiquez l’écran concerné, le nom de l’agent ou de la mission, et ce que vous attendiez.`,
+  },
+];

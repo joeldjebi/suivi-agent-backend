@@ -1,0 +1,24 @@
+{
+  "name": "@suivi/shared",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Types et constantes partagés entre le back-end et le web",
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/esm/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.esm.json && tsc -p tsconfig.cjs.json && echo '{\"type\":\"commonjs\"}' > dist/cjs/package.json",
+    "dev": "tsc -p tsconfig.esm.json --watch"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
+  }
+}
