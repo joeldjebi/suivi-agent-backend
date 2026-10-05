@@ -3,6 +3,8 @@ import type { Server } from 'socket.io';
 import type { User } from '../entities';
 
 export const rooms = {
+  /** Tous les comptes connectés de la structure (annonces de mise à jour). */
+  tenant: (tenantId: string) => `tenant:${tenantId}`,
   /** Administrateurs de la structure. */
   admins: (tenantId: string) => `tenant:${tenantId}:admins`,
   /** Chefs d'équipe qui supervisent toute la structure (formule sans groupes). */

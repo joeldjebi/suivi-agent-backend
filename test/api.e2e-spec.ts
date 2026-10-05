@@ -1185,6 +1185,52 @@ describe('Positions et carte en temps réel (RG-11, RG-12)', () => {
   });
 });
 
+describe('Mises à jour en direct des appareils', () => {
+  it('annonce aux comptes de la structure ce que l’administrateur ou le chef modifie', async () => {
+    const t = await newTenant(app);
+    const agent = await t.createUser('agent');
+    const other = await newTenant(app, 'Autre');
+    const url = (await app.getUrl()).replace('[::1]', 'localhost');
+    const connect = async (token?: string) => {
+      const socket: Socket = io(url, {
+        auth: { token },
+        transports: ['websocket'],
+      });
+      await new Promise<void>((resolve, reject) => {
+        socket.on('connect', () => resolve());
+        socket.on('connect_error', reject);
+      });
+      return socket;
+    };
+    const agentSocket = await connect(agent.api.token);
+    const outsider = await connect(other.admin.api.token);
+    const seen: string[] = [];
+    const foreign: string[] = [];
+    agentSocket.on('sync', (e: { topic: string }) => seen.push(e.topic));
+    outsider.on('sync', (e: { topic: string }) => foreign.push(e.topic));
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const received = new Promise<{ topic: string }>((resolve) =>
+        agentSocket.once('sync', resolve),
+      );
+      const zone = await t.createZone('Plateau', PLATEAU);
+      expect(await received).toEqual({ topic: 'zones' });
+
+      // Les gestes de l'agent lui-même ne sont pas annoncés ; les échecs non plus.
+      await agent.api.post('/zone-requests', { zoneId: zone.id }).expect(201);
+      await t.admin.api.patch('/zones/00000000-0000-0000-0000-000000000000', {
+        name: 'X',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(seen).toEqual(['zones']);
+      expect(foreign).toEqual([]);
+    } finally {
+      agentSocket.disconnect();
+      outsider.disconnect();
+    }
+  });
+});
+
 describe('Réaffectation par un responsable (RG-31, RG-32)', () => {
   it('le chef déplace un agent en cours de journée ; seul l’administrateur force la capacité', async () => {
     const t = await newTenant(app);

@@ -37,7 +37,7 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
       const token = (client.handshake.auth as { token?: string }).token;
       if (!token) throw new Error('Jeton manquant');
       const payload = await this.jwt.verifyAsync<JwtPayload>(token);
-      const joined = [rooms.user(payload.sub)];
+      const joined = [rooms.user(payload.sub), rooms.tenant(payload.tenantId)];
       if (payload.role === Role.Admin)
         joined.push(rooms.admins(payload.tenantId));
       if (payload.role === Role.TeamLead) {

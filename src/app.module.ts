@@ -7,6 +7,7 @@ import { AlertsModule } from './alerts/alerts.module';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { SyncInterceptor } from './common/sync.interceptor';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppController } from './app.controller';
@@ -97,6 +98,8 @@ import { ZonesModule } from './zones/zones.module';
     { provide: APP_GUARD, useExisting: SubscriptionGuard },
     // L'audit enveloppe la transaction : il n'écrit qu'une fois la requête terminée.
     { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
+    // Annonce des mises à jour aux appareils, après l'enregistrement.
+    { provide: APP_INTERCEPTOR, useClass: SyncInterceptor },
     { provide: APP_INTERCEPTOR, useClass: TenantTransactionInterceptor },
     { provide: APP_FILTER, useClass: QueryFailedFilter },
   ],
