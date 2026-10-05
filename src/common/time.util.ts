@@ -37,6 +37,11 @@ export function workDate(
   return previous.toISOString().slice(0, 10);
 }
 
+/** Date calendaire (AAAA-MM-JJ) d'un instant dans le fuseau de la structure. */
+export function localDate(at: Date, timeZone: string): string {
+  return localParts(at, timeZone).date;
+}
+
 export function isValidTimeZone(timeZone: string): boolean {
   try {
     new Intl.DateTimeFormat('en-US', { timeZone });

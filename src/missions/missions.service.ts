@@ -26,6 +26,7 @@ import {
   type Impact,
 } from '../common/deletion';
 import { NotificationsService } from '../common/notifications.service';
+import { localDate } from '../common/time.util';
 import {
   Group,
   Mission,
@@ -262,6 +263,7 @@ export class MissionsService {
         );
       }
     }
+    if (dto.dueDate) await this.assertNotPast(new Date(dto.dueDate));
     if (dto.pay) await this.assertCanSetPay(user);
     if (dto.progressMethod !== ProgressMethod.Manual && !dto.targetValue) {
       throw badRequest(
@@ -302,6 +304,12 @@ export class MissionsService {
     const mission = await this.findManageable(user, id);
     if (mission.progressMethod === ProgressMethod.Manual)
       delete dto.targetValue;
+    // Une échéance déjà passée peut être gardée telle quelle, pas déplacée dans le passé.
+    if (
+      dto.dueDate &&
+      new Date(dto.dueDate).getTime() !== mission.dueDate?.getTime()
+    )
+      await this.assertNotPast(new Date(dto.dueDate));
     await this.db.manager.update(
       Mission,
       { id },
@@ -314,6 +322,16 @@ export class MissionsService {
     );
     await this.refreshStatus(id);
     return this.get(user, id);
+  }
+
+  /** Échéance au plus tôt aujourd'hui (date de la structure). */
+  private async assertNotPast(due: Date) {
+    const { timezone } = await this.access.settings();
+    if (localDate(due, timezone) < localDate(new Date(), timezone))
+      throw badRequest(
+        'DUE_DATE_PAST',
+        'L’échéance ne peut pas être une date passée',
+      );
   }
 
   /** Ce qu'une suppression définitive emporterait. */

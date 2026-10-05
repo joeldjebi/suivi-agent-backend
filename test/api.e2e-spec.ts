@@ -1185,6 +1185,64 @@ describe('Positions et carte en temps réel (RG-11, RG-12)', () => {
   });
 });
 
+describe('Échéance des missions', () => {
+  it('refuse une échéance passée à la création et en modification, garde l’existante', async () => {
+    const t = await newTenant(app);
+    const agent = await t.createUser('agent');
+    const type = (
+      await t.admin.api
+        .post('/mission-types', {
+          name: 'Visite',
+          fields: [{ key: 'nom', label: 'Nom', type: 'text', required: true }],
+        })
+        .expect(201)
+    ).body as { id: string };
+    const day = 86400_000;
+    const body = (dueDate: string) => ({
+      typeId: type.id,
+      title: 'Visites',
+      assigneeAgentId: agent.id,
+      progressMethod: 'count',
+      targetValue: 5,
+      dueDate,
+    });
+    const past = new Date(Date.now() - 2 * day).toISOString();
+    const res = await t.admin.api.post('/missions', body(past)).expect(400);
+    expect((res.body as { code: string }).code).toBe('DUE_DATE_PAST');
+
+    // Aujourd'hui reste permis, même à une heure déjà passée.
+    const today = new Date();
+    today.setUTCHours(0, 30, 0, 0);
+    const mission = (
+      await t.admin.api.post('/missions', body(today.toISOString())).expect(201)
+    ).body as { id: string; dueDate: string };
+
+    await t.admin.api
+      .patch(`/missions/${mission.id}`, { dueDate: past })
+      .expect(400);
+    // Échéance dépassée : on peut modifier le reste sans la changer.
+    await owner.query(
+      `UPDATE missions SET due_date = now() - interval '3 days' WHERE id = $1`,
+      [mission.id],
+    );
+    const [{ due_date }] = await owner.query<{ due_date: Date }[]>(
+      `SELECT due_date FROM missions WHERE id = $1`,
+      [mission.id],
+    );
+    const updated = await t.admin.api
+      .patch(`/missions/${mission.id}`, {
+        title: 'Visites (prolongée)',
+        dueDate: due_date.toISOString(),
+      })
+      .expect(200);
+    expect(updated.body).toMatchObject({ title: 'Visites (prolongée)' });
+    const later = new Date(Date.now() + 5 * day).toISOString();
+    await t.admin.api
+      .patch(`/missions/${mission.id}`, { dueDate: later })
+      .expect(200);
+  });
+});
+
 describe('Mises à jour en direct des appareils', () => {
   it('annonce aux comptes de la structure ce que l’administrateur ou le chef modifie', async () => {
     const t = await newTenant(app);
