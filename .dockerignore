@@ -1,0 +1,9 @@
+node_modules
+dist
+shared/node_modules
+shared/dist
+.env
+deploy/.env
+test
+coverage
+*.log

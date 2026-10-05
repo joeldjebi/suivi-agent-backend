@@ -1,0 +1,69 @@
+# Production de Suivi Agent : base PostGIS, Redis, API et site web (Nginx) sur un seul port.
+# Tout est isolé dans ses conteneurs : rien n'est partagé avec les autres projets du serveur.
+#
+# Arborescence attendue sur le serveur :
+#   /opt/suivi-agent/suivi-agent-backend   (ce dépôt)
+#   /opt/suivi-agent/suivi-agent-frontend  (dépôt du site web)
+#
+# Depuis ce dossier (deploy/) : docker compose -f docker-compose.prod.yml up -d --build
+name: suivi-agent
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DATABASE_USER}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
+      POSTGRES_DB: ${DATABASE_NAME}
+      APP_DB_USER: ${DATABASE_APP_USER}
+      APP_DB_PASSWORD: ${DATABASE_APP_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres-init.sh:/docker-entrypoint-initdb.d/20-app-role.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER} -d ${DATABASE_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+
+  api:
+    build: ..
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_HOST: db
+      DATABASE_PORT: 5432
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      TRUST_PROXY: 1
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  web:
+    build:
+      context: ../../suivi-agent-frontend
+      args:
+        VITE_PLATFORM_PATH: ${VITE_PLATFORM_PATH:-}
+        VITE_TILE_URL: ${VITE_TILE_URL:-}
+    restart: unless-stopped
+    ports:
+      - "${PUBLIC_PORT:-8090}:80"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  redisdata:
