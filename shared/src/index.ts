@@ -5,3 +5,4 @@ export * from './payroll';
 export * from './landing';
 export * from './support';
 export * from './onboarding';
+export * from './onboarding-slides';

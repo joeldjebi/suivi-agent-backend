@@ -5200,6 +5200,182 @@ describe('Espace éditeur (super administrateur)', () => {
   });
 });
 
+describe('Onboarding de l’app mobile', () => {
+  let sa: Api;
+
+  beforeAll(async () => {
+    const email = uniqueEmail('sa-onb');
+    await owner.query(
+      `INSERT INTO platform_admins (email, password_hash, first_name, last_name)
+       VALUES ($1, $2, 'Onboarding', 'Editeur')`,
+      [email, await hashPassword('Editeur2026!')],
+    );
+    sa = new Api(
+      app,
+      (
+        await new Api(app)
+          .post('/platform/auth/login', { email, password: 'Editeur2026!' })
+          .expect(200)
+      ).body.accessToken as string,
+    );
+  });
+
+  it('pages d’origine lues sans connexion, modifiées, réordonnées et republiées par l’éditeur', async () => {
+    const anonymous = new Api(app);
+    const pub = (await anonymous.get('/public/app-onboarding').expect(200))
+      .body;
+    expect(pub).toMatchObject({ enabled: true, version: 1 });
+    expect(pub.slides.map((s: Body) => s.animation)).toEqual([
+      'location',
+      'missions',
+      'team',
+    ]);
+    expect(pub.slides[0]).toMatchObject({ color: null, lottieUrl: null });
+
+    let editor = (await sa.get('/platform/app-onboarding').expect(200)).body;
+    const [first, second, third] = editor.slides as Body[];
+    editor = (
+      await sa
+        .patch(`/platform/app-onboarding/slides/${first.id}`, {
+          title: 'Bienvenue sur Suivi',
+          color: '#0F766E',
+        })
+        .expect(200)
+    ).body;
+    expect(editor.slides[0]).toMatchObject({
+      title: 'Bienvenue sur Suivi',
+      color: '#0F766E',
+    });
+    await sa
+      .patch(`/platform/app-onboarding/slides/${first.id}`, { color: 'rouge' })
+      .expect(400);
+    await sa
+      .patch(`/platform/app-onboarding/slides/${first.id}`, {
+        animation: 'fusee',
+      })
+      .expect(400);
+
+    // Nouvelle page, puis ordre changé ; une page masquée n'est pas envoyée à l'app.
+    editor = (
+      await sa
+        .post('/platform/app-onboarding/slides', {
+          title: 'Votre paie',
+          body: 'Suivez vos gains au jour le jour.',
+          animation: 'missions',
+        })
+        .expect(201)
+    ).body;
+    const extra = editor.slides[3] as Body;
+    await sa
+      .put('/platform/app-onboarding/order', {
+        ids: [third.id, first.id, second.id, extra.id],
+      })
+      .expect(200);
+    await sa
+      .put('/platform/app-onboarding/order', { ids: [third.id] })
+      .expect(400);
+    await sa
+      .patch(`/platform/app-onboarding/slides/${extra.id}`, {
+        isActive: false,
+      })
+      .expect(200);
+    const reordered = (
+      await anonymous.get('/public/app-onboarding').expect(200)
+    ).body;
+    expect(reordered.slides.map((s: Body) => s.id)).toEqual([
+      third.id,
+      first.id,
+      second.id,
+    ]);
+
+    // Animation Lottie importée : vérifiée, servie, puis retirée.
+    const upload = (id: string, buffer: Buffer, name: string) =>
+      request(app.getHttpServer())
+        .put(`/api/platform/app-onboarding/slides/${id}/lottie`)
+        .set('Authorization', `Bearer ${sa.token}`)
+        .attach('file', buffer, name);
+    await upload(second.id, Buffer.from('pas du json'), 'x.json').expect(400);
+    await upload(second.id, Buffer.from('{"a":1}'), 'x.json').expect(400);
+    const lottie = {
+      v: '5.7.4',
+      fr: 30,
+      ip: 0,
+      op: 60,
+      w: 200,
+      h: 200,
+      layers: [],
+    };
+    editor = (
+      await upload(
+        second.id,
+        Buffer.from(JSON.stringify(lottie)),
+        'carte.json',
+      ).expect(200)
+    ).body;
+    const withLottie = (editor.slides as Body[]).find(
+      (s) => s.id === second.id,
+    )!;
+    expect(withLottie).toMatchObject({ lottieName: 'carte.json' });
+    const served = await anonymous
+      .get(withLottie.lottieUrl.replace('/api', ''))
+      .expect(200);
+    expect(served.body).toEqual(lottie);
+    expect(served.headers['cache-control']).toContain('immutable');
+    await sa
+      .delete(`/platform/app-onboarding/slides/${second.id}/lottie`)
+      .expect(200);
+    await anonymous.get(withLottie.lottieUrl.replace('/api', '')).expect(404);
+
+    // Au moins une page affichée ; au plus six pages.
+    for (const s of [first, second])
+      await sa.delete(`/platform/app-onboarding/slides/${s.id}`).expect(200);
+    await sa.delete(`/platform/app-onboarding/slides/${third.id}`).expect(400);
+    await sa
+      .patch(`/platform/app-onboarding/slides/${third.id}`, {
+        isActive: false,
+      })
+      .expect(400);
+    for (let i = 0; i < 4; i++)
+      await sa
+        .post('/platform/app-onboarding/slides', {
+          title: `Page ${i}`,
+          body: 'Texte de la page.',
+          animation: 'team',
+        })
+        .expect(201);
+    await sa
+      .post('/platform/app-onboarding/slides', {
+        title: 'Une de trop',
+        body: 'Texte de la page.',
+        animation: 'team',
+      })
+      .expect(400);
+
+    // Nouvelle version : l'app le remontre ; désactivation ; pages d'origine.
+    editor = (await sa.post('/platform/app-onboarding/republish').expect(200))
+      .body;
+    expect(editor.version).toBe(2);
+    expect(editor.publishedAt).not.toBeNull();
+    await sa.put('/platform/app-onboarding', { enabled: false }).expect(200);
+    expect(
+      (await anonymous.get('/public/app-onboarding').expect(200)).body,
+    ).toMatchObject({ enabled: false, version: 2 });
+    editor = (
+      await sa.post('/platform/app-onboarding/restore-defaults').expect(200)
+    ).body;
+    expect(editor.slides).toHaveLength(3);
+
+    // Réservé à l'éditeur ; journalisé.
+    await anonymous.get('/platform/app-onboarding').expect(401);
+    const t = await newTenant(app);
+    await t.admin.api.get('/platform/app-onboarding').expect(401);
+    const [{ n }] = await owner.query<{ n: number }[]>(
+      `SELECT count(*)::int AS n FROM platform_audit WHERE action LIKE 'app_onboarding.%'`,
+    );
+    expect(n).toBeGreaterThan(10);
+  });
+});
+
 describe('Site vitrine modulable par l’éditeur', () => {
   let sa: Api;
 

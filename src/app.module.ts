@@ -1,3 +1,4 @@
+import { AppOnboardingModule } from './app-onboarding/app-onboarding.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
 import { ReportsModule } from './reports/reports.module';
 import { ExportsModule } from './exports/exports.module';
@@ -72,6 +73,7 @@ import { ZonesModule } from './zones/zones.module';
     ExportsModule,
     ReportsModule,
     OnboardingModule,
+    AppOnboardingModule,
     DocsModule,
     ZoneRequestsModule,
     DaysModule,
