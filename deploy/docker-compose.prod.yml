@@ -46,6 +46,9 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       TRUST_PROXY: 1
+    # Clés hors dépôt (compte de service Firebase pour les notifications push).
+    volumes:
+      - ./secrets:/app/secrets:ro
     depends_on:
       db:
         condition: service_healthy

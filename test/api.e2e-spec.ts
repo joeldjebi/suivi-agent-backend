@@ -26,6 +26,7 @@ import {
   uniquePhone,
   YOPOUGON,
 } from './helpers';
+import { PushService, type PushMessage } from '../src/common/push.service';
 
 type Body = Record<string, any>;
 
@@ -1333,6 +1334,110 @@ describe('Mon équipe (agent)', () => {
       zones: [{ id: zone.id }],
     });
     expect(team.leads.map((l: Body) => l.id)).toEqual([lead.id]);
+  });
+});
+
+describe('Notifications push', () => {
+  it('téléphones enregistrés, envoi à chaque notification, jetons périmés oubliés', async () => {
+    const push = app.get(PushService);
+    const sent: { tokens: string[]; message: PushMessage }[] = [];
+    let invalid: string[] = [];
+    push.transport = {
+      send: (tokens, message) => {
+        sent.push({ tokens: tokens.map((t) => t.token), message });
+        return Promise.resolve({ invalid });
+      },
+    };
+    try {
+      const t = await newTenant(app);
+      await t.settings({ useGroups: true, approvalMode: 'manual' });
+      const zone = await t.createZone('Plateau', PLATEAU);
+      const lead = await t.createUser('team_lead');
+      const agent = await t.createUser('agent');
+      await t.createGroup('Nord', lead.id, [agent.id], [zone.id]);
+      const leadToken = `lead-${'x'.repeat(30)}`;
+      const agentToken = `agent-${'y'.repeat(30)}`;
+
+      await lead.api
+        .post('/devices', {
+          token: leadToken,
+          platform: 'ios',
+          appVersion: '1.0.0',
+        })
+        .expect(204);
+      await agent.api
+        .post('/devices', { token: agentToken, platform: 'android' })
+        .expect(204);
+      await agent.api
+        .post('/devices', { token: agentToken, platform: 'web' })
+        .expect(400);
+      await new Api(app)
+        .post('/devices', { token: agentToken, platform: 'android' })
+        .expect(401);
+
+      // Demande de zone : le chef est prévenu sur son téléphone, avec de quoi décider.
+      const request = (
+        await agent.api.post('/zone-requests', { zoneId: zone.id }).expect(201)
+      ).body as { id: string };
+      await new Promise((r) => setTimeout(r, 200));
+      const toLead = sent.find(
+        (s) => s.message.type === 'zone_request.created',
+      )!;
+      expect(toLead.tokens).toEqual([leadToken]);
+      expect(toLead.message).toMatchObject({
+        title: 'Demande de zone à approuver',
+        data: { requestId: request.id, zoneId: zone.id },
+      });
+
+      // Décision : l'agent est prévenu.
+      await lead.api
+        .post(`/zone-requests/${request.id}/decision`, { approve: true })
+        .expect(201);
+      await new Promise((r) => setTimeout(r, 200));
+      expect(
+        sent.find((s) => s.message.type === 'zone_request.approved')?.tokens,
+      ).toEqual([agentToken]);
+
+      // Le téléphone change de compte : le jeton suit le dernier connecté.
+      const other = await t.createUser('agent');
+      await other.api
+        .post('/devices', { token: agentToken, platform: 'android' })
+        .expect(204);
+      const [{ owner: holder }] = await owner.query<{ owner: string }[]>(
+        `SELECT user_id AS owner FROM push_devices WHERE token = $1`,
+        [agentToken],
+      );
+      expect(holder).toBe(other.id);
+      // Seul son détenteur le retire (déconnexion).
+      await agent.api.delete(`/devices/${agentToken}`).expect(204);
+      await other.api.delete(`/devices/${agentToken}`).expect(204);
+      expect(
+        await owner.query(`SELECT 1 FROM push_devices WHERE token = $1`, [
+          agentToken,
+        ]),
+      ).toHaveLength(0);
+
+      // Application désinstallée : Firebase signale le jeton, il est oublié.
+      invalid = [leadToken];
+      await push.sendToUsers([lead.id], {
+        type: 'team.message',
+        title: 'Test',
+      });
+      expect(
+        await owner.query(`SELECT 1 FROM push_devices WHERE token = $1`, [
+          leadToken,
+        ]),
+      ).toHaveLength(0);
+      // Plus de téléphone : rien n'est envoyé.
+      const before = sent.length;
+      await push.sendToUsers([lead.id], {
+        type: 'team.message',
+        title: 'Test',
+      });
+      expect(sent.length).toBe(before);
+    } finally {
+      push.transport = null;
+    }
   });
 });
 

@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { SocketEvent } from '@suivi/shared';
 import { Notification } from '../entities';
 import { DbService } from './db.service';
+import { PushService } from './push.service';
 import { RealtimeService, rooms } from './realtime.service';
 
 export interface NotificationInput {
@@ -12,14 +13,15 @@ export interface NotificationInput {
 }
 
 /**
- * Notifications enregistrées en base et poussées en temps réel.
- * L'envoi push (Firebase Cloud Messaging) sera branché ici avec l'app mobile.
+ * Notifications enregistrées en base, poussées en temps réel aux écrans ouverts et envoyées
+ * en notification push sur les téléphones (même app fermée).
  */
 @Injectable()
 export class NotificationsService {
   constructor(
     private readonly db: DbService,
     private readonly realtime: RealtimeService,
+    private readonly push: PushService,
   ) {}
 
   async notify(userIds: string[], input: NotificationInput): Promise<void> {
@@ -45,6 +47,13 @@ export class NotificationsService {
           notification,
         );
       }
+      // Push : une fois les données enregistrées, sans retarder la requête.
+      void this.push.sendToUsers(unique, {
+        type: input.type,
+        title: input.title,
+        body: input.body,
+        data: input.data,
+      });
     });
   }
 }
