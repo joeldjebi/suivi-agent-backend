@@ -2538,7 +2538,19 @@ describe('Désactivation et suppression définitive en cascade', () => {
     expect(
       (await agent.api.get('/missions').expect(200)).body.items,
     ).toHaveLength(0);
-    await agent.api.get(`/missions/${mission.id}`).expect(404);
+    // Désactivée : l'agent apprend qu'elle est close (lecture et envoi).
+    await agent.api
+      .get(`/missions/${mission.id}`)
+      .expect(409)
+      .expect((r) => expect(r.body.code).toBe('MISSION_CLOSED'));
+    await agent.api
+      .post(`/missions/${mission.id}/submissions`, {
+        clientId: crypto.randomUUID(),
+        data: { commerce: 'Après clôture' },
+        submittedAt: new Date().toISOString(),
+      })
+      .expect(409)
+      .expect((r) => expect(r.body.code).toBe('MISSION_CLOSED'));
     expect(
       (await t.admin.api.get('/missions').expect(200)).body.items,
     ).toHaveLength(0);

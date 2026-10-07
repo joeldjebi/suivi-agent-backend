@@ -735,7 +735,10 @@ export class MissionsService {
               await this.access.settings(),
             ),
           )));
-      if (!assigned || !mission.isActive) throw notFound('Mission');
+      if (!assigned) throw notFound('Mission');
+      // Désactivée après coup : l'agent sait qu'elle est close (et non introuvable).
+      if (!mission.isActive)
+        throw conflict('MISSION_CLOSED', 'Cette mission est clôturée');
       return mission;
     }
     return this.findManageable(user, id, mission);
