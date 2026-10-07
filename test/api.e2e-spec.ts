@@ -1952,6 +1952,128 @@ describe('Formulaires avec photo et « Ma semaine »', () => {
   });
 });
 
+describe('Alerte sécurité (SOS)', () => {
+  it('déclenchée par l’agent, prise en charge, close ; jamais refermée seule', async () => {
+    const t = await newTenant(app);
+    await t.settings({ useGroups: true });
+    const zone = await t.createZone('Plateau', PLATEAU);
+    const lead = await t.createUser('team_lead');
+    const otherLead = await t.createUser('team_lead');
+    const admin2 = await t.createUser('admin');
+    const agent = await t.createUser('agent');
+    await t.createGroup('Nord', lead.id, [agent.id], [zone.id]);
+    await agent.api.post('/zone-requests', { zoneId: zone.id }).expect(201);
+    await agent.api.post('/days/start').expect(200);
+
+    const types = async (actor: { api: Api }) =>
+      (
+        (await actor.api.get('/notifications').expect(200)).body as {
+          type: string;
+        }[]
+      ).map((n) => n.type);
+
+    // Rien en cours.
+    expect((await agent.api.get('/safety/sos').expect(200)).body).toEqual({});
+    const raised = (
+      await agent.api
+        .post('/safety/sos', {
+          lat: IN_PLATEAU.lat,
+          lng: IN_PLATEAU.lng,
+          accuracy: 12,
+          battery: 0.4,
+          message: 'Agression, besoin d’aide',
+        })
+        .expect(201)
+    ).body as { id: string; type: string; data: Record<string, unknown> };
+    expect(raised).toMatchObject({
+      type: 'sos',
+      data: {
+        lat: IN_PLATEAU.lat,
+        lng: IN_PLATEAU.lng,
+        message: 'Agression, besoin d’aide',
+      },
+    });
+    // Le chef et tous les administrateurs sont prévenus ; pas l'autre chef.
+    for (const actor of [lead, t.admin, admin2])
+      expect(await types(actor)).toContain('alert.sos');
+    expect(await types(otherLead)).not.toContain('alert.sos');
+
+    // Nouvelle position : même alerte, pas de nouvel envoi.
+    const again = (
+      await agent.api
+        .post('/safety/sos', { lat: 5.321, lng: -4.021 })
+        .expect(201)
+    ).body as { id: string; data: { lat: number } };
+    expect(again.id).toBe(raised.id);
+    expect(again.data.lat).toBe(5.321);
+    expect((await types(lead)).filter((x) => x === 'alert.sos')).toHaveLength(
+      1,
+    );
+    expect((await agent.api.get('/safety/sos').expect(200)).body).toMatchObject(
+      { id: raised.id },
+    );
+
+    // Prise en charge : l'agent sait que quelqu'un s'en occupe.
+    await lead.api
+      .post(`/alerts/${raised.id}/ack`, { note: 'J’appelle' })
+      .expect(201);
+    expect(await types(agent)).toContain('alert.sos_ack');
+
+    // Fin de journée : l'alerte reste ouverte.
+    await agent.api.post('/days/end').expect(200);
+    const open = (await t.admin.api.get('/alerts?type=sos').expect(200))
+      .body as {
+      id: string;
+      resolvedAt: string | null;
+    }[];
+    expect(open[0]).toMatchObject({ id: raised.id, resolvedAt: null });
+    // Numéro de l'agent, pour l'appeler.
+    expect(
+      (open[0] as unknown as { agent: { phone: string } }).agent.phone,
+    ).toMatch(/^\+225/);
+
+    // Clôture : seulement par un responsable de l'agent, et seulement pour une alerte sécurité.
+    await otherLead.api.post(`/alerts/${raised.id}/close`, {}).expect(403);
+    const closed = (
+      await lead.api
+        .post(`/alerts/${raised.id}/close`, { note: 'Agent en sécurité' })
+        .expect(201)
+    ).body as { resolvedAt: string | null; data: { closingNote: string } };
+    expect(closed.resolvedAt).not.toBeNull();
+    expect(closed.data.closingNote).toBe('Agent en sécurité');
+    expect(await types(agent)).toContain('alert.sos_closed');
+    expect((await agent.api.get('/safety/sos').expect(200)).body).toEqual({});
+
+    // Fausse alerte : annulée par l'agent, les responsables sont informés.
+    const second = (await agent.api.post('/safety/sos', {}).expect(201))
+      .body as {
+      id: string;
+    };
+    expect(second.id).not.toBe(raised.id);
+    await agent.api.post('/safety/sos/cancel').expect(204);
+    expect(await types(lead)).toContain('alert.sos_cancelled');
+    const cancelled = (
+      (await t.admin.api.get('/alerts?type=sos&status=resolved').expect(200))
+        .body as {
+        id: string;
+        data: { cancelled?: boolean };
+      }[]
+    ).find((a) => a.id === second.id);
+    expect(cancelled?.data.cancelled).toBe(true);
+
+    // Une alerte automatique ne se clôt pas à la main ; l'administrateur ne lance pas de SOS.
+    const [{ id: auto }] = await owner.query<{ id: string }[]>(
+      `INSERT INTO agent_alerts (tenant_id, agent_id, type, data) VALUES ($1, $2, 'low_battery', '{}') RETURNING id`,
+      [t.tenantId, agent.id],
+    );
+    await t.admin.api
+      .post(`/alerts/${auto}/close`, {})
+      .expect(409)
+      .expect((r) => expect(r.body.code).toBe('AUTO_RESOLVED'));
+    await t.admin.api.post('/safety/sos', {}).expect(403);
+  });
+});
+
 describe('Durée de travail', () => {
   it('structure, puis groupe, puis agent ; visible dans l’app, le bilan et l’historique', async () => {
     const t = await newTenant(app);

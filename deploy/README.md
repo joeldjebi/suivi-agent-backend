@@ -24,6 +24,27 @@ Compte éditeur (super administrateur) :
 docker compose -f docker-compose.prod.yml exec api node dist/database/platform-admin.js email@exemple.ci 'MotDePasseLong' Prénom Nom
 ```
 
+## Notifications push (clé Firebase)
+
+La clé de service Firebase ne passe jamais par Git. Depuis le poste qui la détient :
+
+```
+ssh root@SERVEUR "mkdir -p /opt/suivi-agent/suivi-agent-backend/deploy/secrets"
+scp firebase-service-account.json root@SERVEUR:/opt/suivi-agent/suivi-agent-backend/deploy/secrets/firebase-service-account.json
+```
+
+Puis sur le serveur : la clé doit appartenir à l'utilisateur de l'API dans son conteneur
+(`node`, identifiant 1000), lisible par lui seul.
+
+```
+chown -R 1000:1000 /opt/suivi-agent/suivi-agent-backend/deploy/secrets
+chmod 700 /opt/suivi-agent/suivi-agent-backend/deploy/secrets
+chmod 600 /opt/suivi-agent/suivi-agent-backend/deploy/secrets/firebase-service-account.json
+```
+
+Ajouter `FIREBASE_SERVICE_ACCOUNT_FILE=/app/secrets/firebase-service-account.json` dans `.env`,
+redémarrer l'API, et vérifier « Notifications push activées » dans ses journaux.
+
 ## Mise à jour
 
 ```

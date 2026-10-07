@@ -2,13 +2,14 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
   Param,
   ParseUUIDPipe,
   Post,
   Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { Role } from '@suivi/shared';
+import { AlertType, Role } from '@suivi/shared';
 import {
   Between,
   FindOptionsWhere,
@@ -21,11 +22,16 @@ import {
 import { AccessService } from '../common/access.service';
 import { AlertsService } from '../common/alerts.service';
 import type { AuthUser } from '../common/auth-user';
-import { notFound } from '../common/business.exception';
+import { conflict, notFound } from '../common/business.exception';
 import { DbService } from '../common/db.service';
-import { CurrentUser, Roles } from '../common/decorators';
-import { AgentAlert } from '../entities';
-import { AcknowledgeDto, ListAlertsQuery } from './alerts.dto';
+import { AllowWhenSuspended, CurrentUser, Roles } from '../common/decorators';
+import { AgentAlert, User } from '../entities';
+import {
+  AcknowledgeDto,
+  CloseAlertDto,
+  ListAlertsQuery,
+  RaiseSosDto,
+} from './alerts.dto';
 
 @ApiTags('Alertes')
 @ApiBearerAuth()
@@ -98,9 +104,79 @@ export class AlertsController {
         note: dto.note?.trim() || null,
       },
     );
+    const updated = await m.findOneByOrFail(AgentAlert, { id });
+    if (updated.type === AlertType.Sos && !updated.resolvedAt)
+      await this.alerts.sosAcknowledged(
+        updated,
+        await m.findOneByOrFail(User, { id: user.id }),
+      );
+    const [info] = await this.alerts.toInfo([updated]);
+    return info;
+  }
+
+  /**
+   * Clôture d'une alerte sécurité par un responsable (les autres alertes se referment
+   * d'elles-mêmes quand la situation se règle).
+   */
+  @Post(':id/close')
+  async close(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CloseAlertDto,
+  ) {
+    const m = this.db.manager;
+    const alert = await m.findOneBy(AgentAlert, { id });
+    if (!alert) throw notFound('Alerte');
+    await this.access.assertCanManageAgent(user, alert.agentId);
+    if (alert.type !== AlertType.Sos)
+      throw conflict(
+        'AUTO_RESOLVED',
+        'Cette alerte se referme d’elle-même quand la situation se règle',
+      );
+    if (!alert.resolvedAt)
+      await this.alerts.closeSos(
+        alert,
+        await m.findOneByOrFail(User, { id: user.id }),
+        dto.note?.trim() || null,
+      );
     const [info] = await this.alerts.toInfo([
       await m.findOneByOrFail(AgentAlert, { id }),
     ]);
     return info;
+  }
+}
+
+/** Alerte sécurité de l'agent : déclenchée depuis l'app, avec sa position. */
+@ApiTags('Alerte sécurité (agent)')
+@ApiBearerAuth()
+@Roles(Role.Agent)
+@AllowWhenSuspended()
+@Controller('safety/sos')
+export class SafetyController {
+  constructor(private readonly alerts: AlertsService) {}
+
+  @Get()
+  current(@CurrentUser() user: AuthUser) {
+    return this.alerts.currentSos(user.id);
+  }
+
+  /** Demande d'aide : le chef et les administrateurs sont prévenus aussitôt. */
+  @Post()
+  raise(@CurrentUser() user: AuthUser, @Body() dto: RaiseSosDto) {
+    return this.alerts.raiseSos(user.id, {
+      ...(dto.lat != null && dto.lng != null
+        ? { lat: dto.lat, lng: dto.lng }
+        : {}),
+      ...(dto.accuracy != null ? { accuracy: dto.accuracy } : {}),
+      ...(dto.battery != null ? { battery: dto.battery } : {}),
+      ...(dto.message?.trim() ? { message: dto.message.trim() } : {}),
+    });
+  }
+
+  /** Fausse alerte : annulée par l'agent. */
+  @Post('cancel')
+  @HttpCode(204)
+  cancel(@CurrentUser() user: AuthUser) {
+    return this.alerts.cancelSos(user.id);
   }
 }

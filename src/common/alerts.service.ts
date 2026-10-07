@@ -5,7 +5,7 @@ import {
   DayStatus,
   SocketEvent,
 } from '@suivi/shared';
-import { type FindOptionsWhere, In, IsNull } from 'typeorm';
+import { type FindOptionsWhere, In, IsNull, Not } from 'typeorm';
 import { AgentAlert, TenantSettings, User } from '../entities';
 import { AccessService } from './access.service';
 import { DbService } from './db.service';
@@ -29,6 +29,7 @@ const TITLES: Record<AlertType, string> = {
   [AlertType.Mocked]: 'position simulée',
   [AlertType.OutOfZone]: 'hors zone',
   [AlertType.LateStart]: 'journée pas démarrée',
+  [AlertType.Sos]: 'alerte sécurité',
 };
 
 /**
@@ -100,7 +101,134 @@ export class AlertsService {
 
   /** Fin de journée : les alertes liées à la journée n'ont plus d'objet. */
   async resolveDay(dayId: string, at = new Date()) {
-    await this.resolveWhere({ dayId, resolvedAt: IsNull() }, at);
+    // L'alerte sécurité reste ouverte tant qu'un responsable ne l'a pas close.
+    await this.resolveWhere(
+      { dayId, resolvedAt: IsNull(), type: Not(AlertType.Sos) },
+      at,
+    );
+  }
+
+  // ------------------------------------------------------------ alerte sécurité
+
+  /** Destinataires d'une alerte sécurité : le chef de l'agent et tous les administrateurs. */
+  private async sosRecipients(agentId: string) {
+    const agent = await this.access.getAgent(agentId);
+    const approvers = await this.access.approverIds(
+      agent,
+      await this.access.settings(),
+    );
+    return {
+      agent,
+      recipients: [
+        ...new Set([...approvers, ...(await this.access.adminIds())]),
+      ],
+    };
+  }
+
+  /**
+   * L'agent demande de l'aide, avec sa position. Une alerte déjà ouverte est mise à jour
+   * (nouvelle position) sans nouvel envoi ; sinon chef et administrateurs sont prévenus.
+   */
+  async raiseSos(
+    agentId: string,
+    data: Record<string, unknown>,
+  ): Promise<AgentAlertInfo> {
+    const m = this.db.manager;
+    const existing = await m.findOneBy(AgentAlert, {
+      agentId,
+      type: AlertType.Sos,
+      resolvedAt: IsNull(),
+    });
+    const at = new Date().toISOString();
+    if (existing) {
+      existing.data = { ...existing.data, ...data, updatedAt: at };
+      await m.save(AgentAlert, existing);
+      await this.emit(existing);
+      return (await this.toInfo([existing]))[0];
+    }
+    const { agent, recipients } = await this.sosRecipients(agentId);
+    const [day] = await m.query<{ id: string }[]>(
+      `SELECT id FROM work_days WHERE agent_id = $1 AND status IN ('active', 'paused')
+       ORDER BY started_at DESC LIMIT 1`,
+      [agentId],
+    );
+    const alert = await this.open(agent, AlertType.Sos, day?.id ?? null, data, {
+      notify: false,
+    });
+    const saved =
+      alert ??
+      (await m.findOneByOrFail(AgentAlert, {
+        agentId,
+        type: AlertType.Sos,
+        resolvedAt: IsNull(),
+      }));
+    await this.notifications.notify(recipients, {
+      type: 'alert.sos',
+      title: `Alerte sécurité : ${agent.firstName} ${agent.lastName}`,
+      body: describe(AlertType.Sos, data),
+      data: { alertId: saved.id, agentId, type: AlertType.Sos },
+    });
+    return (await this.toInfo([saved]))[0];
+  }
+
+  /** Alerte en cours de l'agent (reprise de l'écran après relance de l'app). */
+  async currentSos(agentId: string): Promise<AgentAlertInfo | null> {
+    const alert = await this.db.manager.findOneBy(AgentAlert, {
+      agentId,
+      type: AlertType.Sos,
+      resolvedAt: IsNull(),
+    });
+    return alert ? (await this.toInfo([alert]))[0] : null;
+  }
+
+  /** Fausse alerte : l'agent l'annule, les destinataires en sont informés. */
+  async cancelSos(agentId: string): Promise<void> {
+    const m = this.db.manager;
+    const alert = await m.findOneBy(AgentAlert, {
+      agentId,
+      type: AlertType.Sos,
+      resolvedAt: IsNull(),
+    });
+    if (!alert) return;
+    alert.resolvedAt = new Date();
+    alert.data = { ...alert.data, cancelled: true };
+    await m.save(AgentAlert, alert);
+    await this.emit(alert);
+    const { agent, recipients } = await this.sosRecipients(agentId);
+    await this.notifications.notify(recipients, {
+      type: 'alert.sos_cancelled',
+      title: `Alerte annulée : ${agent.firstName} ${agent.lastName}`,
+      body: 'L’agent a annulé son alerte sécurité (fausse alerte).',
+      data: { alertId: alert.id, agentId },
+    });
+  }
+
+  /** Un responsable clôt l'alerte (situation réglée) ; l'agent en est informé. */
+  async closeSos(alert: AgentAlert, by: User, note: string | null) {
+    alert.resolvedAt = new Date();
+    alert.data = {
+      ...alert.data,
+      closedBy: { id: by.id, firstName: by.firstName, lastName: by.lastName },
+      ...(note ? { closingNote: note } : {}),
+    };
+    await this.db.manager.save(AgentAlert, alert);
+    await this.emit(alert);
+    await this.notifications.notify([alert.agentId], {
+      type: 'alert.sos_closed',
+      title: 'Alerte sécurité close',
+      body: `${by.firstName} ${by.lastName} a clos votre alerte.${note ? ` « ${note} »` : ''}`,
+      data: { alertId: alert.id },
+    });
+  }
+
+  /** Prise en charge d'une alerte sécurité : l'agent sait que quelqu'un s'en occupe. */
+  async sosAcknowledged(alert: AgentAlert, by: User) {
+    await this.notifications.notify([alert.agentId], {
+      type: 'alert.sos_ack',
+      title: 'Votre alerte est prise en charge',
+      body: `${by.firstName} ${by.lastName} s’en occupe.${alert.note ? ` « ${alert.note} »` : ''}`,
+      data: { alertId: alert.id },
+    });
   }
 
   private async resolveWhere(where: FindOptionsWhere<AgentAlert>, at: Date) {
@@ -352,7 +480,13 @@ export class AlertsService {
     const users = ids.length
       ? await this.db.manager.find(User, {
           where: { id: In(ids) },
-          select: { id: true, firstName: true, lastName: true, groupId: true },
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            groupId: true,
+            phone: true,
+          },
         })
       : [];
     const byId = new Map(users.map((u) => [u.id, u]));
@@ -367,6 +501,7 @@ export class AlertsService {
           firstName: agent.firstName,
           lastName: agent.lastName,
           groupId: agent.groupId,
+          phone: agent.phone,
         },
         dayId: a.dayId,
         startedAt: a.startedAt.toISOString(),
@@ -402,5 +537,14 @@ function describe(type: AlertType, data: Record<string, unknown>): string {
       return 'Hors de sa zone au-delà du délai d’alerte.';
     case AlertType.LateStart:
       return `Début attendu à ${String(data.expectedAt)}.`;
+    case AlertType.Sos: {
+      const located =
+        typeof data.lat === 'number' && typeof data.lng === 'number';
+      const message =
+        typeof data.message === 'string' && data.message
+          ? `« ${data.message} »`
+          : 'Demande d’aide immédiate.';
+      return `${message}${located ? ' Position transmise.' : ' Position indisponible.'}`;
+    }
   }
 }

@@ -89,13 +89,22 @@ export const AlertType = {
   OutOfZone: 'out_of_zone',
   /** Journée pas démarrée après l'heure attendue */
   LateStart: 'late_start',
+  /** Alerte sécurité déclenchée par l'agent : jamais refermée automatiquement */
+  Sos: 'sos',
 } as const;
 export type AlertType = (typeof AlertType)[keyof typeof AlertType];
 
 export interface AgentAlertInfo {
   id: string;
   type: AlertType;
-  agent: { id: string; firstName: string; lastName: string; groupId: string | null };
+  agent: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    groupId: string | null;
+    /** Pour l'appeler (alerte sécurité) */
+    phone?: string | null;
+  };
   dayId: string | null;
   startedAt: string;
   /** Vide : la situation dure encore */
