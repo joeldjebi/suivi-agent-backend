@@ -117,11 +117,24 @@ export class MissionsService {
       .take(query.limit)
       .getManyAndCount();
     // Requêtes séquentielles : elles partagent la connexion de la transaction.
+    // Agent : nombre de formulaires qu'il a envoyés sur chaque mission (« mes participations »).
+    const myForms = new Map<string, number>();
+    if (user.role === Role.Agent && missions.length) {
+      const rows = await this.db.manager.query<{ id: string; n: number }[]>(
+        `SELECT mission_id AS id, count(*)::int AS n FROM mission_submissions
+         WHERE agent_id = $1 AND mission_id = ANY($2) GROUP BY mission_id`,
+        [user.id, missions.map((x) => x.id)],
+      );
+      for (const r of rows) myForms.set(r.id, r.n);
+    }
     const items = [];
     for (const mission of missions) {
       items.push({
         ...this.view(user, mission),
         progress: await this.progress(mission),
+        ...(user.role === Role.Agent
+          ? { myForms: myForms.get(mission.id) ?? 0 }
+          : {}),
       });
     }
     return { items, total, page: query.page, limit: query.limit };

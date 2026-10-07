@@ -1185,6 +1185,124 @@ describe('Positions et carte en temps réel (RG-11, RG-12)', () => {
   });
 });
 
+describe('Mon équipe (agent)', () => {
+  it('l’agent voit son groupe, son chef, ses zones et ses participations', async () => {
+    const t = await newTenant(app);
+    await t.settings({ useGroups: true });
+    const plateau = await t.createZone('Plateau', PLATEAU, { capacity: 5 });
+    await t.createZone('Cocody', COCODY);
+    const lead = await t.createUser('team_lead');
+    const agent = await t.createUser('agent');
+    const loner = await t.createUser('agent');
+
+    // Sans groupe : aucune zone, et l'app peut l'expliquer.
+    let team = (await agent.api.get('/me/team').expect(200)).body;
+    expect(team).toMatchObject({
+      usesGroups: true,
+      group: null,
+      groupMissing: true,
+      leads: [],
+      zones: [],
+    });
+
+    const group = await t.createGroup(
+      'Nord',
+      lead.id,
+      [agent.id],
+      [plateau.id],
+    );
+    team = (await agent.api.get('/me/team').expect(200)).body;
+    expect(team).toMatchObject({
+      group: { id: group.id, name: 'Nord', members: 1 },
+      groupMissing: false,
+      zones: [{ id: plateau.id, name: 'Plateau', capacity: 5 }],
+    });
+    expect(team.leads).toHaveLength(1);
+    expect(team.leads[0]).toMatchObject({
+      id: lead.id,
+      firstName: 'team_lead',
+    });
+    expect(team.leads[0].phone).toBeTruthy();
+    expect(team.leads[0]).not.toHaveProperty('email');
+
+    // Missions : assignées à lui ou à son groupe, avec ses formulaires envoyés.
+    const type = (
+      await t.admin.api
+        .post('/mission-types', {
+          name: 'Visite',
+          fields: [{ key: 'nom', label: 'Nom', type: 'text', required: true }],
+        })
+        .expect(201)
+    ).body as { id: string };
+    const due = new Date(Date.now() + 5 * 86400_000).toISOString();
+    const create = (body: object) =>
+      t.admin.api
+        .post('/missions', {
+          typeId: type.id,
+          progressMethod: 'count',
+          targetValue: 10,
+          dueDate: due,
+          ...body,
+        })
+        .expect(201);
+    const mine = (await create({ title: 'Perso', assigneeAgentId: agent.id }))
+      .body as { id: string };
+    const ours = (await create({ title: 'Groupe', assigneeGroupId: group.id }))
+      .body as { id: string };
+    await create({ title: 'Autre', assigneeAgentId: loner.id });
+
+    await agent.api.post('/zone-requests', { zoneId: plateau.id }).expect(201);
+    await agent.api.post('/days/start').expect(200);
+    await agent.api
+      .post(`/missions/${ours.id}/submissions`, {
+        clientId: '7b0c1a2e-0000-4000-8000-000000000001',
+        data: { nom: 'Boutique A' },
+        submittedAt: new Date().toISOString(),
+      })
+      .expect(201);
+
+    const list = (await agent.api.get('/missions').expect(200)).body.items as {
+      id: string;
+      title: string;
+      myForms: number;
+      assigneeAgentId: string | null;
+      assigneeGroupId: string | null;
+    }[];
+    expect(list.map((m) => m.title).sort()).toEqual(['Groupe', 'Perso']);
+    expect(list.find((m) => m.id === ours.id)).toMatchObject({
+      myForms: 1,
+      assigneeGroupId: group.id,
+    });
+    expect(list.find((m) => m.id === mine.id)).toMatchObject({
+      myForms: 0,
+      assigneeAgentId: agent.id,
+    });
+    // Le compteur est propre aux agents.
+    const adminList = (await t.admin.api.get('/missions').expect(200)).body
+      .items as Body[];
+    expect(adminList[0]).not.toHaveProperty('myForms');
+
+    // Réservé aux agents.
+    await lead.api.get('/me/team').expect(403);
+    await t.admin.api.get('/me/team').expect(403);
+  });
+
+  it('sans groupes : les chefs de la structure et toutes les zones ouvertes', async () => {
+    const t = await newTenant(app);
+    const zone = await t.createZone('Plateau', PLATEAU);
+    const lead = await t.createUser('team_lead');
+    const agent = await t.createUser('agent');
+    const team = (await agent.api.get('/me/team').expect(200)).body;
+    expect(team).toMatchObject({
+      usesGroups: false,
+      group: null,
+      groupMissing: false,
+      zones: [{ id: zone.id }],
+    });
+    expect(team.leads.map((l: Body) => l.id)).toEqual([lead.id]);
+  });
+});
+
 describe('Échéance des missions', () => {
   it('refuse une échéance passée à la création et en modification, garde l’existante', async () => {
     const t = await newTenant(app);

@@ -1,4 +1,5 @@
 import { AppOnboardingModule } from './app-onboarding/app-onboarding.module';
+import { MeModule } from './me/me.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
 import { ReportsModule } from './reports/reports.module';
 import { ExportsModule } from './exports/exports.module';
@@ -74,6 +75,7 @@ import { ZonesModule } from './zones/zones.module';
     ReportsModule,
     OnboardingModule,
     AppOnboardingModule,
+    MeModule,
     DocsModule,
     ZoneRequestsModule,
     DaysModule,
