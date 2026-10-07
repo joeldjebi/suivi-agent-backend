@@ -79,5 +79,7 @@ export const FieldType = {
   Boolean: 'boolean',
   Date: 'date',
   Select: 'select',
+  /** Photo prise sur le terrain, avec sa position et son heure */
+  Photo: 'photo',
 } as const;
 export type FieldType = (typeof FieldType)[keyof typeof FieldType];

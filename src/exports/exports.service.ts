@@ -178,6 +178,25 @@ export class ExportsService {
       ],
     );
     this.assertSize(rows.length);
+    // Photos : heure de prise et position (l'image se consulte sur la plateforme).
+    const photoIds = rows.flatMap((r) =>
+      type.fields
+        .filter((f) => f.type === FieldType.Photo)
+        .map((f) => (r.data as Record<string, unknown> | null)?.[f.key])
+        .filter((v): v is string => typeof v === 'string'),
+    );
+    const photos = new Map(
+      (photoIds.length
+        ? await m.query<
+            { id: string; at: string; lat: number | null; lng: number | null }[]
+          >(
+            `SELECT id, to_char(taken_at AT TIME ZONE $2, 'DD/MM/YYYY HH24:MI') AS at, lat, lng
+             FROM submission_photos WHERE id = ANY($1::uuid[])`,
+            [photoIds, settings.timezone],
+          )
+        : []
+      ).map((p) => [p.id, p]),
+    );
     const kind = (f: MissionField): ColumnKind =>
       f.type === FieldType.Number
         ? 'general'
@@ -187,6 +206,15 @@ export class ExportsService {
     const value = (f: MissionField, v: unknown): Cell => {
       if (v === undefined || v === null || v === '') return null;
       if (f.type === FieldType.Boolean) return v ? 'Oui' : 'Non';
+      if (f.type === FieldType.Photo) {
+        const p = typeof v === 'string' ? photos.get(v) : undefined;
+        if (!p) return 'Photo';
+        const where =
+          p.lat != null && p.lng != null
+            ? ` · ${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}`
+            : '';
+        return `Photo du ${p.at}${where}`;
+      }
       const raw =
         typeof v === 'string' || typeof v === 'number'
           ? String(v)

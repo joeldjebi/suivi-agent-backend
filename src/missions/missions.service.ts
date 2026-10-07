@@ -37,6 +37,7 @@ import {
   WorkDay,
 } from '../entities';
 import { PayrollCalculator, type Payee } from '../payroll/payroll.calculator';
+import { PhotosService } from '../photos/photos.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { normalizePay } from './mission-pay';
 import { MissionTypesService } from './mission-types.service';
@@ -88,6 +89,7 @@ export class MissionsService {
     private readonly types: MissionTypesService,
     private readonly notifications: NotificationsService,
     private readonly subscriptions: SubscriptionsService,
+    private readonly photos: PhotosService,
   ) {}
 
   async list(user: AuthUser, query: ListMissionsQuery) {
@@ -537,6 +539,8 @@ export class MissionsService {
     }
     const type = await this.types.get(mission.typeId);
     const data = validateData(type.fields, dto.data);
+    const photoIds = photoIdsOf(type.fields, data);
+    await this.photos.assertUsable(user.id, photoIds);
 
     const day = await m
       .createQueryBuilder(WorkDay, 'd')
@@ -587,6 +591,7 @@ export class MissionsService {
       submittedAt,
       status: SubmissionStatus.Accepted,
     });
+    await this.photos.attach(saved.id, photoIds);
     await this.refreshStatus(missionId);
     return saved;
   }
@@ -610,7 +615,25 @@ export class MissionsService {
       qb.andWhere('s.status = :status', { status: query.status });
     if (query.from) qb.andWhere('s.submittedAt >= :from', { from: query.from });
     if (query.to) qb.andWhere('s.submittedAt < :to', { to: query.to });
-    return qb.getMany();
+    const items = await qb.getMany();
+    // Photos : position et heure de prise, pour l'affichage.
+    const mission = await this.db.manager.findOneByOrFail(Mission, {
+      id: missionId,
+    });
+    const fields = (await this.types.get(mission.typeId)).fields;
+    const meta = await this.photos.meta(
+      items.flatMap((s) => photoIdsOf(fields, s.data)),
+    );
+    return items.map((s) => {
+      const ids = photoIdsOf(fields, s.data);
+      return ids.length
+        ? Object.assign(s, {
+            photos: Object.fromEntries(
+              ids.filter((id) => meta[id]).map((id) => [id, meta[id]]),
+            ),
+          })
+        : s;
+    });
   }
 
   /** Rejet d'un formulaire : il ne compte plus dans la progression (RG-39). */
@@ -920,6 +943,16 @@ export class MissionsService {
   }
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Identifiants des photos d'un formulaire (champs de type photo). */
+function photoIdsOf(fields: MissionField[], data: Record<string, unknown>) {
+  return fields
+    .filter((f) => f.type === FieldType.Photo)
+    .map((f) => data[f.key])
+    .filter((v): v is string => typeof v === 'string' && UUID.test(v));
+}
+
 /** Vérifie les valeurs saisies par rapport aux champs du type (RG-13) ; les clés inconnues sont ignorées. */
 function validateData(fields: MissionField[], data: Record<string, unknown>) {
   const clean: Record<string, unknown> = {};
@@ -944,7 +977,10 @@ function validateData(fields: MissionField[], data: Record<string, unknown>) {
         !Number.isNaN(Date.parse(value))) ||
       (field.type === FieldType.Select &&
         typeof value === 'string' &&
-        !!field.options?.includes(value));
+        !!field.options?.includes(value)) ||
+      (field.type === FieldType.Photo &&
+        typeof value === 'string' &&
+        UUID.test(value));
     if (!ok)
       throw badRequest(
         'INVALID_FORM',

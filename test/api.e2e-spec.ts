@@ -1706,6 +1706,252 @@ describe('Notifications de l’administrateur aux équipes', () => {
   });
 });
 
+describe('Formulaires avec photo et « Ma semaine »', () => {
+  const PNG = Buffer.from(
+    '89504e470d0a1a0a0000000d4948445200000001000000010806000000',
+    'hex',
+  );
+
+  it('photo géolocalisée : envoi, rattachement au formulaire, accès et export', async () => {
+    const t = await newTenant(app);
+    await t.settings({ useGroups: true });
+    const zone = await t.createZone('Plateau', PLATEAU);
+    const lead = await t.createUser('team_lead');
+    const agent = await t.createUser('agent');
+    const other = await t.createUser('agent');
+    const otherLead = await t.createUser('team_lead');
+    await t.createGroup('Nord', lead.id, [agent.id], [zone.id]);
+    const type = (
+      await t.admin.api
+        .post('/mission-types', {
+          name: 'Relevé de vitrine',
+          fields: [
+            {
+              key: 'commerce',
+              label: 'Commerce',
+              type: 'text',
+              required: true,
+            },
+            { key: 'vitrine', label: 'Vitrine', type: 'photo', required: true },
+          ],
+        })
+        .expect(201)
+    ).body as { id: string };
+    const mission = (
+      await t.admin.api
+        .post('/missions', {
+          typeId: type.id,
+          title: 'Vitrines du Plateau',
+          zoneIds: [zone.id],
+          progressMethod: 'count',
+          targetValue: 10,
+        })
+        .expect(201)
+    ).body as { id: string };
+    await agent.api.post('/zone-requests', { zoneId: zone.id }).expect(201);
+    await agent.api.post('/days/start').expect(200);
+
+    const upload = (
+      actor: { api: Api },
+      fields: Record<string, string>,
+      buffer = PNG,
+    ) => {
+      const r = request(app.getHttpServer())
+        .post('/api/photos')
+        .set('Authorization', `Bearer ${actor.api.token}`)
+        .attach('file', buffer, 'vitrine.png');
+      for (const [k, v] of Object.entries(fields)) void r.field(k, v);
+      return r;
+    };
+    const clientId = randomUUID();
+    const takenAt = new Date().toISOString();
+    const photo = (
+      await upload(agent, {
+        clientId,
+        takenAt,
+        lat: String(IN_PLATEAU.lat),
+        lng: String(IN_PLATEAU.lng),
+        accuracy: '8',
+      }).expect(201)
+    ).body as { id: string };
+    // Renvoi (réseau coupé pendant la réponse) : même photo.
+    const again = (await upload(agent, { clientId, takenAt }).expect(201))
+      .body as { id: string };
+    expect(again.id).toBe(photo.id);
+    await upload(
+      agent,
+      { clientId: randomUUID(), takenAt },
+      Buffer.from('texte'),
+    )
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('PHOTO_FORMAT'));
+    await upload(lead, { clientId: randomUUID(), takenAt }).expect(403);
+
+    // Formulaire : photo obligatoire, valide, appartenant à l'agent.
+    const submit = (data: object) =>
+      agent.api.post(`/missions/${mission.id}/submissions`, {
+        clientId: randomUUID(),
+        data,
+        submittedAt: new Date().toISOString(),
+      });
+    await submit({ commerce: 'Boutique A' })
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('INVALID_FORM'));
+    await submit({ commerce: 'Boutique A', vitrine: 'pas-un-id' })
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('INVALID_FORM'));
+    await submit({ commerce: 'Boutique A', vitrine: randomUUID() })
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('PHOTO_MISSING'));
+    await submit({ commerce: 'Boutique A', vitrine: photo.id }).expect(201);
+    // Une photo ne sert qu'à un formulaire.
+    await submit({ commerce: 'Boutique B', vitrine: photo.id })
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('PHOTO_MISSING'));
+
+    // Lecture : position et heure de prise avec le formulaire.
+    const list = (
+      await t.admin.api.get(`/missions/${mission.id}/submissions`).expect(200)
+    ).body as {
+      data: { vitrine: string };
+      photos: Record<string, { lat: number; lng: number; accuracy: number }>;
+    }[];
+    expect(list[0].photos[photo.id]).toMatchObject({
+      lat: IN_PLATEAU.lat,
+      lng: IN_PLATEAU.lng,
+      accuracy: 8,
+    });
+
+    // L'image : l'agent, son chef et l'administrateur ; pas les autres.
+    for (const actor of [agent, lead, t.admin])
+      await actor.api
+        .get(`/photos/${photo.id}`)
+        .expect(200)
+        .expect('Content-Type', 'image/png');
+    await other.api.get(`/photos/${photo.id}`).expect(404);
+    await otherLead.api.get(`/photos/${photo.id}`).expect(403);
+
+    // Export : heure de prise et position.
+    const csv = await t.admin.api
+      .get(`/exports/submissions?missionId=${mission.id}&format=csv`)
+      .expect(200);
+    expect(csv.text).toContain('Photo du ');
+    expect(csv.text).toContain(IN_PLATEAU.lat.toFixed(5));
+  });
+
+  it('ma semaine : temps travaillé par jour, objectif, formulaires et semaine précédente', async () => {
+    const t = await newTenant(app);
+    const zone = await t.createZone('Plateau', PLATEAU);
+    const agent = await t.createUser('agent', { workdayMinutes: 420 });
+    const type = (
+      await t.admin.api
+        .post('/mission-types', {
+          name: 'Visite',
+          fields: [{ key: 'nom', label: 'Nom', type: 'text', required: true }],
+        })
+        .expect(201)
+    ).body as { id: string };
+    const mission = (
+      await t.admin.api
+        .post('/missions', {
+          typeId: type.id,
+          title: 'Visites',
+          zoneIds: [zone.id],
+          progressMethod: 'count',
+          targetValue: 10,
+        })
+        .expect(201)
+    ).body as { id: string };
+
+    // Lundi et mardi d'une semaine passée (6 h et 3 h), et une journée la semaine d'avant.
+    const day = async (date: string, hours: number) => {
+      const [{ id }] = await owner.query<{ id: string }[]>(
+        `INSERT INTO work_days (tenant_id, agent_id, zone_id, status, work_date, started_at, ended_at)
+         VALUES ($1, $2, $3, 'ended', $4::date, $4::date + time '08:00', $4::date + time '08:00' + $5 * interval '1 hour')
+         RETURNING id`,
+        [t.tenantId, agent.id, zone.id, date, hours],
+      );
+      return id;
+    };
+    const monday = await day('2026-09-07', 6);
+    await day('2026-09-08', 3);
+    await day('2026-09-01', 2);
+    // Pause de 30 min le lundi.
+    await owner.query(
+      `INSERT INTO day_pauses (tenant_id, day_id, started_at, ended_at)
+       VALUES ($1, $2, '2026-09-07 10:00', '2026-09-07 10:30')`,
+      [t.tenantId, monday],
+    );
+    const formAt = async (at: string, status = 'accepted') =>
+      owner.query(
+        `INSERT INTO mission_submissions (tenant_id, mission_id, agent_id, client_id, data, submitted_at, status)
+         VALUES ($1, $2, $3, gen_random_uuid(), '{"nom":"x"}', $4, $5)`,
+        [t.tenantId, mission.id, agent.id, at, status],
+      );
+    await formAt('2026-09-07 11:00');
+    await formAt('2026-09-07 12:00');
+    await formAt('2026-09-08 11:00', 'rejected');
+
+    const week = (await agent.api.get('/me/week?date=2026-09-09').expect(200))
+      .body as {
+      from: string;
+      to: string;
+      objectiveMinutes: number;
+      days: {
+        date: string;
+        workedSeconds: number;
+        zones: string[];
+        forms: number;
+        rejected: number;
+      }[];
+      totals: {
+        workedSeconds: number;
+        daysWorked: number;
+        forms: number;
+        rejected: number;
+        objectiveSeconds: number;
+      };
+      previous: { workedSeconds: number; daysWorked: number };
+      missions: { title: string; forms: number }[];
+    };
+    expect(week).toMatchObject({
+      from: '2026-09-07',
+      to: '2026-09-13',
+      objectiveMinutes: 420,
+    });
+    expect(week.days).toHaveLength(7);
+    expect(week.days[0]).toMatchObject({
+      date: '2026-09-07',
+      workedSeconds: 5.5 * 3600,
+      zones: ['Plateau'],
+      forms: 2,
+      rejected: 0,
+    });
+    expect(week.days[1]).toMatchObject({
+      workedSeconds: 3 * 3600,
+      forms: 1,
+      rejected: 1,
+    });
+    expect(week.days[2].workedSeconds).toBe(0);
+    expect(week.totals).toEqual({
+      workedSeconds: 8.5 * 3600,
+      daysWorked: 2,
+      forms: 3,
+      rejected: 1,
+      objectiveSeconds: 2 * 420 * 60,
+    });
+    expect(week.previous).toMatchObject({
+      workedSeconds: 2 * 3600,
+      daysWorked: 1,
+    });
+    expect(week.missions).toEqual([
+      { id: mission.id, title: 'Visites', forms: 2 },
+    ]);
+    // Réservé à l'agent.
+    await t.admin.api.get('/me/week').expect(403);
+  });
+});
+
 describe('Durée de travail', () => {
   it('structure, puis groupe, puis agent ; visible dans l’app, le bilan et l’historique', async () => {
     const t = await newTenant(app);

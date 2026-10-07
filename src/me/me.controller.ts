@@ -1,8 +1,9 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Role } from '@suivi/shared';
 import type { AuthUser } from '../common/auth-user';
 import { CurrentUser, Roles } from '../common/decorators';
+import { WeekQuery } from './me.dto';
 import { MeService } from './me.service';
 
 @ApiTags('Mon équipe (agent)')
@@ -16,5 +17,11 @@ export class MeController {
   @Get('team')
   team(@CurrentUser() user: AuthUser) {
     return this.me.team(user);
+  }
+
+  /** « Ma semaine » : temps travaillé, objectif, formulaires et missions, jour par jour. */
+  @Get('week')
+  week(@CurrentUser() user: AuthUser, @Query() query: WeekQuery) {
+    return this.me.week(user, query.date);
   }
 }
