@@ -4,7 +4,12 @@ import { Role } from '@suivi/shared';
 import { IsNull } from 'typeorm';
 import { AccessService } from '../common/access.service';
 import type { AuthUser } from '../common/auth-user';
-import { badRequest, forbidden, notFound } from '../common/business.exception';
+import {
+  badRequest,
+  conflict,
+  forbidden,
+  notFound,
+} from '../common/business.exception';
 import { DbService } from '../common/db.service';
 import { requirePhone } from '../common/phone';
 import { SessionRevocationService } from '../common/session-revocation.service';
@@ -192,6 +197,8 @@ export class UsersService {
       workdayMinutes: dto.workdayMinutes ?? null,
       isActive: true,
     });
+    if (dto.role === Role.TeamLead && dto.ledGroupIds?.length)
+      await this.setLedGroups(created.id, dto.ledGroupIds);
     return this.db.manager.findOneByOrFail(User, { id: created.id });
   }
 
@@ -221,6 +228,18 @@ export class UsersService {
       await this.subscriptions.assertQuota(role);
     const groupId = dto.groupId === undefined ? existing.groupId : dto.groupId;
     await this.assertGroup(role, groupId);
+    // Numéro de connexion de l'app : figé dès la première connexion de l'agent ou du chef
+    // (il identifie son compte et ses appareils).
+    if (
+      dto.phone !== undefined &&
+      existing.role !== Role.Admin &&
+      (dto.phone ? requirePhone(dto.phone) : null) !== existing.phone &&
+      (await this.hasLoggedIn(id))
+    )
+      throw conflict(
+        'PHONE_LOCKED',
+        'Le numéro ne peut plus être modifié : ce compte s’est déjà connecté',
+      );
     const phone = await this.checkPhone(
       role,
       dto.phone === undefined ? existing.phone : dto.phone,
@@ -228,7 +247,7 @@ export class UsersService {
     );
 
     // `phone` (normalisé) est placé après `...fields` et remplace la valeur saisie.
-    const { password, ...fields } = dto;
+    const { password, ledGroupIds, ...fields } = dto;
     await m.update(
       User,
       { id },
@@ -255,6 +274,8 @@ export class UsersService {
         { revokedAt: new Date() },
       );
     }
+    if (role === Role.TeamLead && ledGroupIds !== undefined)
+      await this.setLedGroups(id, ledGroupIds);
     if (dto.isActive === false && existing.isActive) {
       // Un compte désactivé ne garde aucune place dans les zones.
       await m.query(
@@ -266,6 +287,26 @@ export class UsersService {
       );
     }
     return m.findOneByOrFail(User, { id });
+  }
+
+  /** Groupes dirigés par un chef d'équipe : ceux de la liste, et seulement eux. */
+  private async setLedGroups(leadId: string, groupIds: string[]) {
+    const m = this.db.manager;
+    const ids = [...new Set(groupIds)];
+    const [{ n }] = await m.query<{ n: number }[]>(
+      `SELECT count(*)::int AS n FROM groups WHERE id = ANY($1)`,
+      [ids],
+    );
+    if (n !== ids.length) throw notFound('Groupe');
+    await m.query(
+      `UPDATE groups SET leader_id = NULL WHERE leader_id = $1 AND NOT (id = ANY($2))`,
+      [leadId, ids],
+    );
+    if (ids.length)
+      await m.query(`UPDATE groups SET leader_id = $1 WHERE id = ANY($2)`, [
+        leadId,
+        ids,
+      ]);
   }
 
   /** Ce qu'une suppression définitive emporterait. */
@@ -330,6 +371,14 @@ export class UsersService {
     }
     if (phone) await this.auth.assertPhoneFree(phone, userId);
     return phone;
+  }
+
+  private async hasLoggedIn(userId: string): Promise<boolean> {
+    const rows = await this.db.manager.query<unknown[]>(
+      `SELECT 1 FROM audit_logs WHERE user_id = $1 AND action = 'auth.login' LIMIT 1`,
+      [userId],
+    );
+    return rows.length > 0;
   }
 
   private async assertGroup(role: Role, groupId: string | null | undefined) {

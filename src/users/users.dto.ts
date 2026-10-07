@@ -2,6 +2,8 @@ import { PartialType } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { Role } from '@suivi/shared';
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsEmail,
   IsIn,
@@ -59,6 +61,13 @@ export class CreateUserDto {
   @Min(30)
   @Max(1440)
   workdayMinutes?: number | null;
+
+  /** Chef d'équipe : groupes qu'il dirige (remplace la liste actuelle) */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(200)
+  @IsUUID('all', { each: true })
+  ledGroupIds?: string[];
 }
 
 export class UpdateUserDto extends PartialType(CreateUserDto) {

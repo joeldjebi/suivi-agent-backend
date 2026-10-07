@@ -1464,6 +1464,248 @@ describe('Notifications push', () => {
   });
 });
 
+describe('Notifications de l’administrateur aux équipes', () => {
+  it('par rôle, personnes, zones et missions ; formule, aperçu et historique', async () => {
+    const push = app.get(PushService);
+    const sent: { tokens: string[]; message: PushMessage }[] = [];
+    push.transport = {
+      send: (tokens, message) => {
+        sent.push({ tokens: tokens.map((t) => t.token), message });
+        return Promise.resolve({ invalid: [] });
+      },
+    };
+    try {
+      const t = await newTenant(app);
+      await t.settings({ useGroups: true });
+      const plateau = await t.createZone('Plateau', PLATEAU);
+      const cocody = await t.createZone('Cocody', COCODY);
+      const lead = await t.createUser('team_lead');
+      const otherLead = await t.createUser('team_lead');
+      const north = await t.createUser('agent');
+      const south = await t.createUser('agent');
+      const loner = await t.createUser('agent');
+      await t.createGroup('Nord', lead.id, [north.id], [plateau.id]);
+      await t.createGroup('Sud', otherLead.id, [south.id], []);
+      // L'agent sans groupe a travaillé à Cocody (zone libre) il y a 3 jours.
+      await owner.query(
+        `INSERT INTO work_days (tenant_id, agent_id, zone_id, status, work_date, started_at)
+         VALUES ($1, $2, $3, 'ended', current_date - 3, now() - interval '3 days')`,
+        [t.tenantId, loner.id, cocody.id],
+      );
+      await north.api
+        .post('/devices', {
+          token: `north-${'n'.repeat(30)}`,
+          platform: 'android',
+        })
+        .expect(204);
+
+      const preview = async (audience: object) =>
+        (
+          await t.admin.api
+            .post('/broadcasts/preview', { audience })
+            .expect(201)
+        ).body as {
+          total: number;
+          agents: number;
+          leads: number;
+          reachable: number;
+          sample: string[];
+        };
+
+      expect(await preview({ target: 'all' })).toMatchObject({
+        total: 5,
+        agents: 3,
+        leads: 2,
+        reachable: 1,
+      });
+      expect(await preview({ target: 'agents' })).toMatchObject({ total: 3 });
+      expect(await preview({ target: 'leads' })).toMatchObject({ total: 2 });
+      expect(
+        await preview({ target: 'users', userIds: [south.id, lead.id] }),
+      ).toMatchObject({ total: 2, agents: 1, leads: 1 });
+      // Zone : agents de ses groupes, et ceux qui y ont travaillé ; chefs en option.
+      expect(
+        await preview({ target: 'zones', zoneIds: [plateau.id] }),
+      ).toMatchObject({ total: 1, agents: 1, leads: 0 });
+      expect(
+        await preview({
+          target: 'zones',
+          zoneIds: [plateau.id, cocody.id],
+          includeLeads: true,
+        }),
+      ).toMatchObject({ total: 3, agents: 2, leads: 1 });
+
+      // Missions : assignée à un groupe, à un agent, ou ouverte (agents de ses zones).
+      const type = (
+        await t.admin.api
+          .post('/mission-types', {
+            name: 'Visite',
+            fields: [
+              { key: 'nom', label: 'Nom', type: 'text', required: true },
+            ],
+          })
+          .expect(201)
+      ).body as { id: string };
+      const mission = async (body: object) =>
+        (
+          await t.admin.api
+            .post('/missions', {
+              typeId: type.id,
+              progressMethod: 'count',
+              targetValue: 5,
+              ...body,
+            })
+            .expect(201)
+        ).body as { id: string };
+      const forNorth = await mission({
+        title: 'Groupe Nord',
+        zoneIds: [plateau.id],
+        assigneeGroupId: (
+          await owner.query<{ id: string }[]>(
+            `SELECT id FROM groups WHERE leader_id = $1`,
+            [lead.id],
+          )
+        )[0].id,
+      });
+      const open = await mission({ title: 'Ouverte', zoneIds: [cocody.id] });
+      expect(
+        await preview({ target: 'missions', missionIds: [forNorth.id] }),
+      ).toMatchObject({ total: 1, agents: 1 });
+      expect(
+        await preview({
+          target: 'missions',
+          missionIds: [forNorth.id, open.id],
+          includeLeads: true,
+        }),
+      ).toMatchObject({ total: 3, agents: 2, leads: 1 });
+
+      // Sélection vide ou invalide.
+      await t.admin.api
+        .post('/broadcasts/preview', { audience: { target: 'zones' } })
+        .expect(400)
+        .expect((r) => expect(r.body.code).toBe('EMPTY_SELECTION'));
+      await t.admin.api
+        .post('/broadcasts/preview', {
+          audience: { target: 'users', userIds: [t.admin.id] },
+        })
+        .expect(400)
+        .expect((r) => expect(r.body.code).toBe('UNKNOWN_RECIPIENT'));
+      await t.admin.api
+        .post('/broadcasts/preview', { audience: { target: 'everyone' } })
+        .expect(400);
+
+      // Envoi : notification dans l'app et sur les téléphones, tracée.
+      const result = (
+        await t.admin.api
+          .post('/broadcasts', {
+            title: 'Réunion demain',
+            body: 'Rendez-vous à 8 h au siège.',
+            audience: { target: 'zones', zoneIds: [plateau.id] },
+          })
+          .expect(201)
+      ).body as { id: string; recipients: number; reachable: number };
+      expect(result).toMatchObject({ recipients: 1, reachable: 1 });
+      await new Promise((r) => setTimeout(r, 200));
+      expect(sent.at(-1)?.message).toMatchObject({
+        type: 'broadcast',
+        title: 'Réunion demain',
+        body: 'Rendez-vous à 8 h au siège.',
+        data: { broadcastId: result.id },
+      });
+      const inbox = (await north.api.get('/notifications').expect(200))
+        .body as { type: string; title: string }[];
+      expect(inbox[0]).toMatchObject({
+        type: 'broadcast',
+        title: 'Réunion demain',
+      });
+      const history = (await t.admin.api.get('/broadcasts').expect(200))
+        .body as {
+        title: string;
+        recipients: number;
+        authorName: string;
+        audience: { target: string };
+      }[];
+      expect(history).toHaveLength(1);
+      expect(history[0]).toMatchObject({
+        title: 'Réunion demain',
+        recipients: 1,
+        audience: { target: 'zones' },
+      });
+
+      // Réservé à l'administrateur, et à la formule avec notifications push.
+      await lead.api.get('/broadcasts').expect(403);
+      await owner.query(
+        `UPDATE subscriptions SET plan_code = 'base', status = 'active', trial_ends_at = NULL WHERE tenant_id = $1`,
+        [t.tenantId],
+      );
+      app.get(SubscriptionsService).invalidate(t.tenantId);
+      await t.admin.api
+        .get('/broadcasts')
+        .expect(402)
+        .expect((r) => expect(r.body.code).toBe('FEATURE_NOT_IN_PLAN'));
+      await owner.query(`DELETE FROM tenants WHERE id = $1`, [t.tenantId]);
+    } finally {
+      push.transport = null;
+    }
+  });
+
+  it('modifier un chef : identité et groupes dirigés', async () => {
+    const t = await newTenant(app);
+    await t.settings({ useGroups: true });
+    const lead = await t.createUser('team_lead');
+    const g1 = await t.createGroup('Nord', lead.id, [], []);
+    const g2 = await t.createGroup('Sud', null, [], []);
+    await t.admin.api
+      .patch(`/users/${lead.id}`, {
+        firstName: 'Awa',
+        ledGroupIds: [g2.id],
+      })
+      .expect(200)
+      .expect((r) => expect(r.body.firstName).toBe('Awa'));
+    const led = await owner.query<{ id: string; leader: string | null }[]>(
+      `SELECT id, leader_id AS leader FROM groups WHERE id = ANY($1)`,
+      [[g1.id, g2.id]],
+    );
+    expect(led.find((g) => g.id === g1.id)?.leader).toBeNull();
+    expect(led.find((g) => g.id === g2.id)?.leader).toBe(lead.id);
+    const detail = (await t.admin.api.get(`/team-leads/${lead.id}`).expect(200))
+      .body as { lead: { firstName: string; groups: { id: string }[] } };
+    expect(detail.lead.firstName).toBe('Awa');
+    expect(detail.lead.groups.map((g) => g.id)).toEqual([g2.id]);
+    await t.admin.api
+      .patch(`/users/${lead.id}`, { ledGroupIds: [randomUUID()] })
+      .expect(404);
+
+    // Numéro de connexion : modifiable tant que le compte ne s'est jamais connecté.
+    const email = uniqueEmail('lead');
+    const fresh = (
+      await t.admin.api
+        .post('/users', {
+          email,
+          password: PASSWORD,
+          firstName: 'Nouveau',
+          lastName: 'Chef',
+          role: 'team_lead',
+          phone: uniquePhone(),
+        })
+        .expect(201)
+    ).body as { id: string; phone: string };
+    const corrected = uniquePhone();
+    await t.admin.api
+      .patch(`/users/${fresh.id}`, { phone: corrected })
+      .expect(200);
+    await login(app, email);
+    await t.admin.api
+      .patch(`/users/${fresh.id}`, { phone: uniquePhone() })
+      .expect(409)
+      .expect((r) => expect(r.body.code).toBe('PHONE_LOCKED'));
+    // Le même numéro (formulaire renvoyé tel quel) reste accepté.
+    await t.admin.api
+      .patch(`/users/${fresh.id}`, { phone: corrected, lastName: 'Kouassi' })
+      .expect(200);
+  });
+});
+
 describe('Durée de travail', () => {
   it('structure, puis groupe, puis agent ; visible dans l’app, le bilan et l’historique', async () => {
     const t = await newTenant(app);

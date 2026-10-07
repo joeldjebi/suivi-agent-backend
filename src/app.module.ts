@@ -1,4 +1,5 @@
 import { AppOnboardingModule } from './app-onboarding/app-onboarding.module';
+import { BroadcastsModule } from './broadcasts/broadcasts.module';
 import { DevicesModule } from './devices/devices.module';
 import { MeModule } from './me/me.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
@@ -78,6 +79,7 @@ import { ZonesModule } from './zones/zones.module';
     AppOnboardingModule,
     MeModule,
     DevicesModule,
+    BroadcastsModule,
     DocsModule,
     ZoneRequestsModule,
     DaysModule,
