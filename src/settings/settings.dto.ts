@@ -187,6 +187,11 @@ export class UpdateSettingsDto {
   @IsBoolean()
   alertMocked?: boolean;
 
+  /** Formulaires acceptés seulement pendant une journée dans une zone de la mission */
+  @IsOptional()
+  @IsBoolean()
+  submissionRequiresDay?: boolean;
+
   /** Heure du bilan de fin de journée (HH:mm) ; null : pas d'envoi */
   @IsOptional()
   @ValidateIf((_, v) => v !== null)

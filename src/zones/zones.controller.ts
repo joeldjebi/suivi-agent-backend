@@ -44,7 +44,7 @@ export class ZonesController {
   @Roles(Role.Agent)
   @Get('available')
   available(@CurrentUser() user: AuthUser) {
-    return this.zones.availableFor(user.id);
+    return this.zones.availableFor(user);
   }
 
   @Roles(Role.Admin, Role.TeamLead)

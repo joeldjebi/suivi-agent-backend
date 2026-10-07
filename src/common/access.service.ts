@@ -1,5 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { ApprovalMode, Feature, Role } from '@suivi/shared';
+import {
+  ApprovalMode,
+  Feature,
+  Role,
+  ZoneAccessWithoutGroups,
+} from '@suivi/shared';
 import { In } from 'typeorm';
 import { Group, TenantSettings, User } from '../entities';
 import type { AuthUser } from './auth-user';
@@ -81,6 +86,39 @@ export class AccessService {
     });
     if (!agent) throw notFound('Agent');
     return agent;
+  }
+
+  /**
+   * Zones qu'un agent peut choisir. Avec les groupes : celles de son groupe, plus les zones
+   * libres (rattachées à aucun groupe actif) ; un agent sans groupe n'a que les zones libres.
+   * Sans groupes : toutes les zones. Une zone réservée (accès sans groupes « restreint »)
+   * n'est ouverte qu'aux agents autorisés.
+   */
+  async accessibleZoneIds(
+    agent: User,
+    settings: TenantSettings,
+  ): Promise<string[]> {
+    const restricted =
+      settings.zoneAccessWithoutGroups === ZoneAccessWithoutGroups.Restricted;
+    const rows = await this.db.manager.query<{ id: string }[]>(
+      `SELECT z.id FROM zones z
+       WHERE z.is_active
+         AND (
+           NOT $1
+           OR EXISTS (SELECT 1 FROM group_zones gz JOIN groups g ON g.id = gz.group_id AND g.is_active
+                      WHERE gz.zone_id = z.id AND gz.group_id = $3)
+           OR NOT EXISTS (SELECT 1 FROM group_zones gz JOIN groups g ON g.id = gz.group_id AND g.is_active
+                          WHERE gz.zone_id = z.id)
+         )
+         AND (
+           NOT $2 OR NOT z.restricted
+           OR EXISTS (SELECT 1 FROM zone_agent_access a WHERE a.zone_id = z.id AND a.agent_id = $4)
+           OR ($1 AND EXISTS (SELECT 1 FROM group_zones gz WHERE gz.zone_id = z.id AND gz.group_id = $3))
+         )
+       ORDER BY z.name`,
+      [settings.useGroups, restricted, agent.groupId, agent.id],
+    );
+    return rows.map((r) => r.id);
   }
 
   /** Vérifie que l'utilisateur peut gérer cet agent et le renvoie. */

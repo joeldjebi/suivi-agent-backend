@@ -5,6 +5,7 @@
  */
 import Redis from 'ioredis';
 import { DataSource } from 'typeorm';
+import { MISSION_ZONES_BACKFILL } from './mission-zones';
 
 type Row = Record<string, string>;
 type Box = [w: number, s: number, e: number, n: number];
@@ -1000,5 +1001,6 @@ export async function generateActivity(
     );
   }
 
+  for (const sql of MISSION_ZONES_BACKFILL) await q(sql, [tenantId]);
   return { ...stats, agents: agents.length };
 }

@@ -303,7 +303,8 @@ export class PayrollCalculator {
     for (const mission of data.missions) {
       const concerned =
         mission.agentId === payee.id ||
-        (!!mission.groupId && mission.contributors.includes(payee.id));
+        // Mission de groupe ou ouverte : ceux qui y ont contribué.
+        (!mission.agentId && mission.contributors.includes(payee.id));
       if (!concerned) continue;
       // Paliers de la mission s'ils sont propres (même vides), sinon ceux de la grille.
       const tiers = mission.pay

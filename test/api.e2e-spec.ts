@@ -618,37 +618,43 @@ describe('Concurrence sur les places', () => {
 });
 
 describe('Groupes activés (RG-06, RG-33)', () => {
-  it("l'agent choisit uniquement parmi les zones de son groupe", async () => {
+  it("l'agent choisit parmi les zones de son groupe et les zones libres", async () => {
     const t = await newTenant(app);
     await t.settings({ useGroups: true });
     const plateau = await t.createZone('Plateau', PLATEAU);
+    const cocody = await t.createZone('Cocody', COCODY);
     const yopougon = await t.createZone('Yopougon', YOPOUGON);
     const lead = await t.createUser('team_lead');
+    const otherLead = await t.createUser('team_lead');
     const member = await t.createUser('agent');
     const orphan = await t.createUser('agent');
     await t.createGroup('Nord', lead.id, [member.id], [plateau.id]);
+    await t.createGroup('Sud', otherLead.id, [], [cocody.id]);
 
+    // Sans groupe : les zones libres seulement (Yopougon n'est rattachée à aucun groupe).
     const orphanView = await orphan.api.get('/zones/available').expect(200);
-    expect(orphanView.body).toMatchObject({ zones: [], groupMissing: true });
+    expect(orphanView.body).toMatchObject({ groupMissing: true });
+    expect(orphanView.body.zones.map((z: Body) => z.name)).toEqual([
+      'Yopougon',
+    ]);
+    await orphan.api.post('/zone-requests', { zoneId: plateau.id }).expect(403);
     await orphan.api
-      .post('/zone-requests', { zoneId: plateau.id })
-      .expect(409)
-      .expect((r) => expect(r.body.code).toBe('NO_GROUP'));
+      .post('/zone-requests', { zoneId: yopougon.id })
+      .expect(201);
 
+    // Membre : les zones de son groupe et les zones libres, jamais celles d'un autre groupe.
     expect(
       (await member.api.get('/zones/available').expect(200)).body.zones.map(
         (z: Body) => z.name,
       ),
-    ).toEqual(['Plateau']);
-    await member.api
-      .post('/zone-requests', { zoneId: yopougon.id })
-      .expect(403);
+    ).toEqual(['Plateau', 'Yopougon']);
+    await member.api.post('/zone-requests', { zoneId: cocody.id }).expect(403);
     await member.api.post('/zone-requests', { zoneId: plateau.id }).expect(201);
 
-    // Le chef d'équipe ne voit que les zones de ses groupes.
+    // Le chef d'équipe voit les zones de ses groupes et les zones libres.
     expect(
       (await lead.api.get('/zones').expect(200)).body.map((z: Body) => z.name),
-    ).toEqual(['Plateau']);
+    ).toEqual(['Plateau', 'Yopougon']);
   });
 });
 
@@ -1190,20 +1196,21 @@ describe('Mon équipe (agent)', () => {
     const t = await newTenant(app);
     await t.settings({ useGroups: true });
     const plateau = await t.createZone('Plateau', PLATEAU, { capacity: 5 });
-    await t.createZone('Cocody', COCODY);
+    const cocody = await t.createZone('Cocody', COCODY);
     const lead = await t.createUser('team_lead');
     const agent = await t.createUser('agent');
     const loner = await t.createUser('agent');
 
     // Sans groupe : aucune zone, et l'app peut l'expliquer.
+    // Sans groupe : les zones libres (aucune n'est encore rattachée à un groupe).
     let team = (await agent.api.get('/me/team').expect(200)).body;
     expect(team).toMatchObject({
       usesGroups: true,
       group: null,
       groupMissing: true,
       leads: [],
-      zones: [],
     });
+    expect(team.zones.map((z: Body) => z.name)).toEqual(['Cocody', 'Plateau']);
 
     const group = await t.createGroup(
       'Nord',
@@ -1215,8 +1222,12 @@ describe('Mon équipe (agent)', () => {
     expect(team).toMatchObject({
       group: { id: group.id, name: 'Nord', members: 1 },
       groupMissing: false,
-      zones: [{ id: plateau.id, name: 'Plateau', capacity: 5 }],
     });
+    // Plateau (son groupe) et Cocody (zone libre).
+    expect(team.zones).toEqual([
+      { id: expect.any(String), name: 'Cocody', capacity: null },
+      { id: plateau.id, name: 'Plateau', capacity: 5 },
+    ]);
     expect(team.leads).toHaveLength(1);
     expect(team.leads[0]).toMatchObject({
       id: lead.id,
@@ -1238,6 +1249,7 @@ describe('Mon équipe (agent)', () => {
     const create = (body: object) =>
       t.admin.api
         .post('/missions', {
+          zoneIds: [plateau.id],
           typeId: type.id,
           progressMethod: 'count',
           targetValue: 10,
@@ -1249,7 +1261,28 @@ describe('Mon équipe (agent)', () => {
       .body as { id: string };
     const ours = (await create({ title: 'Groupe', assigneeGroupId: group.id }))
       .body as { id: string };
-    await create({ title: 'Autre', assigneeAgentId: loner.id });
+    // L'agent sans groupe ne peut travailler que dans une zone libre (Cocody).
+    await t.admin.api
+      .post('/missions', {
+        zoneIds: [plateau.id],
+        typeId: type.id,
+        title: 'Refusée',
+        assigneeAgentId: loner.id,
+        progressMethod: 'count',
+        targetValue: 1,
+      })
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('ZONE_NOT_ACCESSIBLE'));
+    await t.admin.api
+      .post('/missions', {
+        zoneIds: [cocody.id],
+        typeId: type.id,
+        title: 'Autre',
+        assigneeAgentId: loner.id,
+        progressMethod: 'count',
+        targetValue: 1,
+      })
+      .expect(201);
 
     await agent.api.post('/zone-requests', { zoneId: plateau.id }).expect(201);
     await agent.api.post('/days/start').expect(200);
@@ -1303,9 +1336,191 @@ describe('Mon équipe (agent)', () => {
   });
 });
 
+describe('Missions par zone', () => {
+  it('zones obligatoires, missions ouvertes, choix de la zone, formulaires en journée', async () => {
+    const t = await newTenant(app);
+    await t.settings({ useGroups: true });
+    const plateau = await t.createZone('Plateau', PLATEAU);
+    const cocody = await t.createZone('Cocody', COCODY);
+    const yopougon = await t.createZone('Yopougon', YOPOUGON);
+    const lead = await t.createUser('team_lead');
+    const otherLead = await t.createUser('team_lead');
+    const agent = await t.createUser('agent');
+    const orphan = await t.createUser('agent');
+    const nord = await t.createGroup('Nord', lead.id, [agent.id], [plateau.id]);
+    await t.createGroup('Sud', otherLead.id, [], [cocody.id]);
+    const type = (
+      await t.admin.api
+        .post('/mission-types', {
+          name: 'Visite',
+          fields: [
+            {
+              key: 'nom',
+              label: 'Nom du commerce',
+              type: 'text',
+              required: true,
+            },
+          ],
+        })
+        .expect(201)
+    ).body as { id: string };
+    const base = { typeId: type.id, progressMethod: 'count', targetValue: 10 };
+
+    // Zones obligatoires, actives, et cohérentes avec l'affectation et le créateur.
+    await t.admin.api
+      .post('/missions', { ...base, title: 'Sans zone', zoneIds: [] })
+      .expect(400);
+    await t.admin.api
+      .post('/missions', {
+        ...base,
+        title: 'Hors groupe',
+        assigneeGroupId: nord.id,
+        zoneIds: [cocody.id],
+      })
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('ZONE_OUTSIDE_GROUP'));
+    await lead.api
+      .post('/missions', { ...base, title: 'Chez Sud', zoneIds: [cocody.id] })
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('ZONE_OUTSIDE_SCOPE'));
+
+    // Mission ouverte au Plateau (créée par le chef) et à Yopougon (zone libre, admin).
+    const plateauOpen = (
+      await lead.api
+        .post('/missions', {
+          ...base,
+          title: 'Prospection Plateau',
+          description: 'Présentez la nouvelle offre.',
+          zoneIds: [plateau.id],
+        })
+        .expect(201)
+    ).body as Body;
+    expect(plateauOpen).toMatchObject({
+      assigneeAgentId: null,
+      assigneeGroupId: null,
+      zones: [{ id: plateau.id, name: 'Plateau' }],
+    });
+    const free = (
+      await t.admin.api
+        .post('/missions', {
+          ...base,
+          title: 'Yopougon libre',
+          zoneIds: [yopougon.id],
+        })
+        .expect(201)
+    ).body as Body;
+    await t.admin.api
+      .post('/missions', { ...base, title: 'Cocody Sud', zoneIds: [cocody.id] })
+      .expect(201);
+
+    // L'agent voit les missions ouvertes des zones qu'il peut choisir, jamais celles d'un autre groupe.
+    const titles = async (api: Api, query = '') =>
+      ((await api.get(`/missions${query}`).expect(200)).body.items as Body[])
+        .map((m) => m.title)
+        .sort();
+    expect(await titles(agent.api)).toEqual([
+      'Prospection Plateau',
+      'Yopougon libre',
+    ]);
+    expect(await titles(orphan.api)).toEqual(['Yopougon libre']);
+    expect(await titles(agent.api, `?zoneId=${yopougon.id}`)).toEqual([
+      'Yopougon libre',
+    ]);
+    await orphan.api.get(`/missions/${plateauOpen.id}`).expect(404);
+    expect(await titles(lead.api)).toEqual([
+      'Prospection Plateau',
+      'Yopougon libre',
+    ]);
+
+    // Choix de la zone : les missions de chaque zone, avec consignes et formulaire.
+    const available = (await agent.api.get('/zones/available').expect(200)).body
+      .zones as Body[];
+    const plateauZone = available.find((z) => z.id === plateau.id)!;
+    expect(plateauZone.missions).toEqual([
+      expect.objectContaining({
+        title: 'Prospection Plateau',
+        description: 'Présentez la nouvelle offre.',
+        assignment: 'open',
+        fields: ['Nom du commerce'],
+        myForms: 0,
+        progress: { current: 0, target: 10, percent: 0 },
+      }),
+    ]);
+    expect(plateauZone.missions[0]).toHaveProperty('myEarnings');
+
+    // Formulaire : pendant une journée, dans une zone de la mission.
+    const form = (lat?: number, lng?: number) => ({
+      clientId: crypto.randomUUID(),
+      data: { nom: 'Boutique' },
+      submittedAt: new Date().toISOString(),
+      ...(lat === undefined ? {} : { lat, lng }),
+    });
+    await agent.api
+      .post(`/missions/${plateauOpen.id}/submissions`, form())
+      .expect(409)
+      .expect((r) => expect(r.body.code).toBe('DAY_REQUIRED'));
+    await agent.api.post('/zone-requests', { zoneId: plateau.id }).expect(201);
+    await agent.api.post('/days/start').expect(200);
+    await agent.api
+      .post(`/missions/${free.id}/submissions`, form())
+      .expect(409)
+      .expect((r) => {
+        expect(r.body.code).toBe('WRONG_ZONE');
+        expect(r.body.message).toContain('Yopougon');
+      });
+    const inside = (
+      await agent.api
+        .post(
+          `/missions/${plateauOpen.id}/submissions`,
+          form(IN_PLATEAU.lat, IN_PLATEAU.lng),
+        )
+        .expect(201)
+    ).body;
+    expect(inside).toMatchObject({ zoneId: plateau.id, outOfZone: false });
+    const outside = (
+      await agent.api
+        .post(
+          `/missions/${plateauOpen.id}/submissions`,
+          form(OUTSIDE.lat, OUTSIDE.lng),
+        )
+        .expect(201)
+    ).body;
+    expect(outside.outOfZone).toBe(true);
+    const listed = (
+      (await agent.api.get('/missions').expect(200)).body.items as Body[]
+    ).find((m) => m.id === plateauOpen.id)!;
+    expect(listed).toMatchObject({ myForms: 2 });
+
+    // Réglage désactivé : hors journée accepté (et rattaché à aucune zone).
+    await t.settings({ submissionRequiresDay: false });
+    const loose = (
+      await orphan.api
+        .post(`/missions/${free.id}/submissions`, form())
+        .expect(201)
+    ).body;
+    expect(loose).toMatchObject({ dayId: null, zoneId: null });
+
+    // Zones modifiables, toujours au moins une.
+    await lead.api
+      .patch(`/missions/${plateauOpen.id}`, { zoneIds: [] })
+      .expect(400);
+    const moved = await t.admin.api
+      .patch(`/missions/${plateauOpen.id}`, {
+        zoneIds: [plateau.id, yopougon.id],
+      })
+      .expect(200);
+    expect(moved.body.zones.map((z: Body) => z.name)).toEqual([
+      'Plateau',
+      'Yopougon',
+    ]);
+  });
+});
+
 describe('Échéance des missions', () => {
   it('refuse une échéance passée à la création et en modification, garde l’existante', async () => {
     const t = await newTenant(app);
+    const zone = await t.createZone('Plateau', PLATEAU);
+    await t.settings({ submissionRequiresDay: false });
     const agent = await t.createUser('agent');
     const type = (
       await t.admin.api
@@ -1317,6 +1532,7 @@ describe('Échéance des missions', () => {
     ).body as { id: string };
     const day = 86400_000;
     const body = (dueDate: string) => ({
+      zoneIds: [zone.id],
       typeId: type.id,
       title: 'Visites',
       assigneeAgentId: agent.id,
@@ -1544,6 +1760,8 @@ describe('Missions (RG-13, RG-14, RG-35 à RG-39)', () => {
 
   it('suit la progression par comptage, rejet et idempotence', async () => {
     const t = await newTenant(app);
+    const zone = await t.createZone('Plateau', PLATEAU);
+    await t.settings({ submissionRequiresDay: false });
     const type = (
       await t.admin.api
         .post('/mission-types', { name: 'Prospection', fields })
@@ -1554,6 +1772,7 @@ describe('Missions (RG-13, RG-14, RG-35 à RG-39)', () => {
 
     await t.admin.api
       .post('/missions', {
+        zoneIds: [zone.id],
         typeId: type.id,
         title: 'Sans objectif',
         assigneeAgentId: agent.id,
@@ -1563,8 +1782,11 @@ describe('Missions (RG-13, RG-14, RG-35 à RG-39)', () => {
       .expect((r) => expect(r.body.code).toBe('TARGET_REQUIRED'));
     await t.admin.api
       .post('/missions', {
+        zoneIds: [zone.id],
         typeId: type.id,
         title: 'Double',
+        assigneeAgentId: agent.id,
+        assigneeGroupId: crypto.randomUUID(),
         progressMethod: 'count',
         targetValue: 2,
       })
@@ -1574,6 +1796,7 @@ describe('Missions (RG-13, RG-14, RG-35 à RG-39)', () => {
     const mission = (
       await t.admin.api
         .post('/missions', {
+          zoneIds: [zone.id],
           typeId: type.id,
           title: '2 visites',
           assigneeAgentId: agent.id,
@@ -1679,6 +1902,8 @@ describe('Missions (RG-13, RG-14, RG-35 à RG-39)', () => {
 
   it('additionne un champ, valide manuellement et détaille les contributions du groupe', async () => {
     const t = await newTenant(app);
+    const zone = await t.createZone('Plateau', PLATEAU);
+    await t.settings({ submissionRequiresDay: false });
     const type = (
       await t.admin.api
         .post('/mission-types', { name: 'Collecte', fields })
@@ -1691,6 +1916,7 @@ describe('Missions (RG-13, RG-14, RG-35 à RG-39)', () => {
 
     await lead.api
       .post('/missions', {
+        zoneIds: [zone.id],
         typeId: type.id,
         title: 'Collecte',
         assigneeGroupId: group.id,
@@ -1704,6 +1930,7 @@ describe('Missions (RG-13, RG-14, RG-35 à RG-39)', () => {
     const collect = (
       await lead.api
         .post('/missions', {
+          zoneIds: [zone.id],
           typeId: type.id,
           title: '1 000 FCFA collectés',
           assigneeGroupId: group.id,
@@ -1794,6 +2021,7 @@ describe('Missions (RG-13, RG-14, RG-35 à RG-39)', () => {
     const manual = (
       await t.admin.api
         .post('/missions', {
+          zoneIds: [zone.id],
           typeId: type.id,
           title: 'Audit du point de vente',
           assigneeAgentId: a1.id,
@@ -1816,6 +2044,8 @@ describe('Missions (RG-13, RG-14, RG-35 à RG-39)', () => {
 
   it('passe en échec à l’échéance et refuse les saisies tardives', async () => {
     const t = await newTenant(app);
+    const zone = await t.createZone('Plateau', PLATEAU);
+    await t.settings({ submissionRequiresDay: false });
     const type = (
       await t.admin.api
         .post('/mission-types', { name: 'P', fields })
@@ -1825,6 +2055,7 @@ describe('Missions (RG-13, RG-14, RG-35 à RG-39)', () => {
     const mission = (
       await t.admin.api
         .post('/missions', {
+          zoneIds: [zone.id],
           typeId: type.id,
           title: 'Urgent',
           assigneeAgentId: agent.id,
@@ -2040,6 +2271,7 @@ describe('Désactivation et suppression définitive en cascade', () => {
     ).body;
     await t.admin.api
       .post('/missions', {
+        zoneIds: [zone.id],
         typeId: type.id,
         title: 'M',
         assigneeGroupId: group.id,
@@ -2065,7 +2297,8 @@ describe('Désactivation et suppression définitive en cascade', () => {
         }),
       );
 
-    // Désactivation : le groupe disparaît des listes, ses agents n'ont plus de zones, son chef plus de droits.
+    // Désactivation : le groupe disparaît des listes, son chef perd ses droits ; ses zones
+    // redeviennent libres (ouvertes aux agents sans groupe actif).
     await t.admin.api
       .patch(`/groups/${group.id}`, { isActive: false })
       .expect(200);
@@ -2075,8 +2308,10 @@ describe('Désactivation et suppression définitive en cascade', () => {
         .body[0].isActive,
     ).toBe(false);
     expect(
-      (await agent.api.get('/zones/available').expect(200)).body.zones,
-    ).toHaveLength(0);
+      (await agent.api.get('/zones/available').expect(200)).body.zones.map(
+        (z: Body) => z.id,
+      ),
+    ).toEqual([zone.id]);
     expect((await lead.api.get('/users').expect(200)).body.items).toHaveLength(
       0,
     );
@@ -2179,6 +2414,8 @@ describe('Désactivation et suppression définitive en cascade', () => {
 
   it('mission et type de mission : désactivation, puis suppression des formulaires', async () => {
     const t = await newTenant(app);
+    const zone = await t.createZone('Plateau', PLATEAU);
+    await t.settings({ submissionRequiresDay: false });
     const agent = await t.createUser('agent');
     const type = (
       await t.admin.api
@@ -2188,6 +2425,7 @@ describe('Désactivation et suppression définitive en cascade', () => {
     const mission = (
       await t.admin.api
         .post('/missions', {
+          zoneIds: [zone.id],
           typeId: type.id,
           title: 'M',
           assigneeAgentId: agent.id,
@@ -2460,6 +2698,7 @@ describe("Chefs d'équipe vus par l'administrateur", () => {
     const mission = (
       await lead.api
         .post('/missions', {
+          zoneIds: [plateau.id, cocody.id],
           typeId: type.id,
           title: '10 visites',
           assigneeGroupId: (await t.admin.api.get('/groups').expect(200))
@@ -2469,6 +2708,7 @@ describe("Chefs d'équipe vus par l'administrateur", () => {
         })
         .expect(201)
     ).body;
+    await agent.api.post('/days/start').expect(200);
     const form = await agent.api
       .post(`/missions/${mission.id}/submissions`, {
         clientId: crypto.randomUUID(),
@@ -2860,6 +3100,8 @@ describe('Abonnement des structures', () => {
 describe('Missions : recherche, type et tri', () => {
   it('filtre la liste par titre et par type, et trie par échéance', async () => {
     const t = await newTenant(app);
+    const zone = await t.createZone('Plateau', PLATEAU);
+    await t.settings({ submissionRequiresDay: false });
     const agent = await t.createUser('agent');
     const fields = [
       { key: 'commerce', label: 'Commerce', type: 'text', required: true },
@@ -2877,6 +3119,7 @@ describe('Missions : recherche, type et tri', () => {
     const create = (title: string, typeId: string, days: number) =>
       t.admin.api
         .post('/missions', {
+          zoneIds: [zone.id],
           typeId,
           title,
           assigneeAgentId: agent.id,
@@ -3184,6 +3427,7 @@ describe('Rémunération (formule Entreprise)', () => {
     const mission = (
       await t.admin.api
         .post('/missions', {
+          zoneIds: [zone.id],
           typeId: type.id,
           title: '2 visites',
           assigneeGroupId: group.id,
@@ -3451,6 +3695,7 @@ describe('Rémunération (formule Entreprise)', () => {
       (
         await t.admin.api
           .post('/missions', {
+            zoneIds: [zone.id],
             typeId,
             title,
             assigneeGroupId: group.id,
@@ -3575,6 +3820,7 @@ describe('Rémunération (formule Entreprise)', () => {
     // Le chef crée des missions, mais ne fixe pas leur rémunération.
     await lead.api
       .post('/missions', {
+        zoneIds: [zone.id],
         ...base,
         title: 'Chef',
         progressMethod: 'count',
@@ -3585,6 +3831,7 @@ describe('Rémunération (formule Entreprise)', () => {
     const own = (
       await t.admin.api
         .post('/missions', {
+          zoneIds: [zone.id],
           ...base,
           title: 'Collecte Mobile Money',
           progressMethod: 'field_sum',
@@ -3600,6 +3847,7 @@ describe('Rémunération (formule Entreprise)', () => {
     const usual = (
       await lead.api
         .post('/missions', {
+          zoneIds: [zone.id],
           ...base,
           title: 'Visite',
           progressMethod: 'count',
@@ -3748,6 +3996,7 @@ describe('Exports Excel et CSV', () => {
     const mission = (
       await t.admin.api
         .post('/missions', {
+          zoneIds: [zone.id],
           typeId: type.id,
           title: 'Collecte Plateau',
           assigneeGroupId: group.id,
@@ -3927,6 +4176,7 @@ describe('Bilan de fin de journée et messages d’équipe', () => {
     const mission = (
       await t.admin.api
         .post('/missions', {
+          zoneIds: [zone.id],
           typeId: type.id,
           title: 'Visites',
           assigneeGroupId: group.id,

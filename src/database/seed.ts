@@ -10,6 +10,7 @@ import 'dotenv/config';
 import { generateActivity } from './activity';
 import { DEMO_PLATFORM_ADMIN, seedPlatform } from './platform-demo';
 import dataSource from './data-source';
+import { MISSION_ZONES_BACKFILL } from './mission-zones';
 
 const PASSWORD = 'Password123!';
 const DEMO_ADMIN = 'admin@demo.ci';
@@ -268,6 +269,7 @@ async function main() {
        VALUES ($1, $2, '50 visites cette semaine', $3, 'count', 50, now() + interval '7 days')`,
       [tenantId, typeId, north],
     );
+    for (const sql of MISSION_ZONES_BACKFILL) await t(sql, [tenantId]);
   });
 
   // Espace de l'éditeur : compte super administrateur et portefeuille de structures clientes.

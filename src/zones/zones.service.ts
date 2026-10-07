@@ -1,9 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import {
-  Role,
-  ZoneAccessWithoutGroups,
-  ZoneRequestStatus,
-} from '@suivi/shared';
+import { Role, ZoneRequestStatus } from '@suivi/shared';
 import { In } from 'typeorm';
 import { AccessService } from '../common/access.service';
 import type { AuthUser } from '../common/auth-user';
@@ -16,10 +12,13 @@ import {
   type Impact,
 } from '../common/deletion';
 import { NotificationsService } from '../common/notifications.service';
+import { MissionsService } from '../missions/missions.service';
 import { TenantSettings, User, Zone, ZoneRequest } from '../entities';
 import { CreateZoneDto, PolygonDto, UpdateZoneDto } from './zones.dto';
 
 export interface ZoneWithOccupancy extends Zone {
+  /** Groupes actifs de la zone ; vide : zone libre */
+  groupIds: string[];
   /** Places réservées (demandes en attente) et occupées (demandes approuvées) */
   taken: number;
   /** Places restantes ; null si la zone est illimitée */
@@ -33,6 +32,7 @@ export class ZonesService {
     private readonly db: DbService,
     private readonly access: AccessService,
     private readonly notifications: NotificationsService,
+    private readonly missions: MissionsService,
   ) {}
 
   async list(
@@ -45,9 +45,12 @@ export class ZonesService {
       user.role === Role.TeamLead &&
       !(await this.access.supervisesAll(user))
     ) {
+      // Les zones de ses groupes, plus les zones libres (rattachées à aucun groupe).
       const groupIds = await this.access.leaderGroupIds(user.id);
       qb.andWhere(
-        `EXISTS (SELECT 1 FROM group_zones gz WHERE gz.zone_id = z.id AND gz.group_id = ANY(:groupIds))`,
+        `(EXISTS (SELECT 1 FROM group_zones gz WHERE gz.zone_id = z.id AND gz.group_id = ANY(:groupIds))
+          OR NOT EXISTS (SELECT 1 FROM group_zones gz JOIN groups g ON g.id = gz.group_id AND g.is_active
+                         WHERE gz.zone_id = z.id))`,
         { groupIds },
       );
     }
@@ -62,7 +65,8 @@ export class ZonesService {
   }
 
   /** Zones que l'agent peut choisir (RG-06, RG-15, RG-33), avec les places restantes. */
-  async availableFor(agentId: string) {
+  async availableFor(user: AuthUser) {
+    const agentId = user.id;
     const settings = await this.access.settings();
     const agent = await this.access.getAgent(agentId);
     const zoneIds = await this.accessibleZoneIds(agent, settings);
@@ -79,10 +83,16 @@ export class ZonesService {
       },
     });
     const withOccupancy = await this.withOccupancy(zones);
+    // Les missions de chaque zone, pour choisir en connaissance de cause.
+    const missions = await this.missions.forZones(
+      user,
+      zones.map((z) => z.id),
+    );
     return {
       zones: withOccupancy.map((zone) => ({
         ...zone,
         mine: current.find((r) => r.zoneId === zone.id)?.status ?? null,
+        missions: missions.get(zone.id) ?? [],
       })),
       approved:
         current.find((r) => r.status === ZoneRequestStatus.Approved) ?? null,
@@ -92,33 +102,9 @@ export class ZonesService {
     };
   }
 
-  async accessibleZoneIds(
-    agent: User,
-    settings: TenantSettings,
-  ): Promise<string[]> {
-    const m = this.db.manager;
-    if (settings.useGroups) {
-      if (!agent.groupId) return [];
-      const rows = await m.query<{ id: string }[]>(
-        `SELECT z.id FROM zones z
-         JOIN group_zones gz ON gz.zone_id = z.id
-         JOIN groups g ON g.id = gz.group_id AND g.is_active
-         WHERE gz.group_id = $1 AND z.is_active`,
-        [agent.groupId],
-      );
-      return rows.map((r) => r.id);
-    }
-    const restrictionEnabled =
-      settings.zoneAccessWithoutGroups === ZoneAccessWithoutGroups.Restricted;
-    const rows = await m.query<{ id: string }[]>(
-      `SELECT z.id FROM zones z
-       WHERE z.is_active AND (
-         NOT $1 OR NOT z.restricted
-         OR EXISTS (SELECT 1 FROM zone_agent_access a WHERE a.zone_id = z.id AND a.agent_id = $2)
-       )`,
-      [restrictionEnabled, agent.id],
-    );
-    return rows.map((r) => r.id);
+  /** Voir AccessService.accessibleZoneIds (règle commune aux zones et aux missions). */
+  accessibleZoneIds(agent: User, settings: TenantSettings): Promise<string[]> {
+    return this.access.accessibleZoneIds(agent, settings);
   }
 
   async create(dto: CreateZoneDto): Promise<ZoneWithOccupancy> {
@@ -250,11 +236,28 @@ export class ZonesService {
        WHERE zone_id = ANY($1) AND status IN ('pending', 'approved') GROUP BY zone_id`,
       [zones.map((z) => z.id)],
     );
+    // Groupes actifs de chaque zone : sans groupe, la zone est libre.
+    const groups = await this.db.manager.query<
+      { zone_id: string; group_id: string }[]
+    >(
+      `SELECT gz.zone_id, gz.group_id FROM group_zones gz
+       JOIN groups g ON g.id = gz.group_id AND g.is_active
+       WHERE gz.zone_id = ANY($1)`,
+      [zones.map((z) => z.id)],
+    );
     return zones.map((zone) => {
       const taken = rows.find((r) => r.zone_id === zone.id)?.taken ?? 0;
       const placesLeft =
         zone.capacity === null ? null : Math.max(zone.capacity - taken, 0);
-      return { ...zone, taken, placesLeft, isFull: placesLeft === 0 };
+      return {
+        ...zone,
+        taken,
+        placesLeft,
+        isFull: placesLeft === 0,
+        groupIds: groups
+          .filter((g) => g.zone_id === zone.id)
+          .map((g) => g.group_id),
+      };
     });
   }
 

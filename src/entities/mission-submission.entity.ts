@@ -18,6 +18,14 @@ export class MissionSubmission {
   @Column({ name: 'day_id', type: 'uuid', nullable: true })
   dayId: string | null;
 
+  /** Zone de la journée pendant laquelle le formulaire a été saisi */
+  @Column({ name: 'zone_id', type: 'uuid', nullable: true })
+  zoneId: string | null;
+
+  /** Saisi hors des zones de la mission, ou position hors du périmètre de la zone */
+  @Column({ name: 'out_of_zone', default: false })
+  outOfZone: boolean;
+
   /** Identifiant généré par le téléphone : rend la synchronisation hors ligne idempotente. */
   @Column({ name: 'client_id', type: 'uuid' })
   clientId: string;

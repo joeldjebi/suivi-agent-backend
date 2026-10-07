@@ -55,6 +55,25 @@ export interface Contribution {
   value: number;
 }
 
+/** Mission présentée au choix de la zone. */
+export interface ZoneMission {
+  id: string;
+  title: string;
+  description: string | null;
+  typeName: string;
+  /** Champs du formulaire à remplir (libellés) */
+  fields: string[];
+  progressMethod: ProgressMethod;
+  targetValue: number;
+  dueDate: Date | null;
+  status: MissionStatus;
+  /** Pour lui, pour son groupe, ou ouverte à tous les agents de la zone */
+  assignment: 'agent' | 'group' | 'open';
+  progress: Progress;
+  myForms: number;
+  myEarnings: MissionEarnings | null;
+}
+
 export interface Progress {
   current: number;
   target: number;
@@ -82,21 +101,37 @@ export class MissionsService {
     else qb.orderBy('m.createdAt', 'DESC');
     if (user.role === Role.Agent) {
       const agent = await this.access.getAgent(user.id);
-      qb.andWhere('(m.assigneeAgentId = :me OR m.assigneeGroupId = :group)', {
-        me: user.id,
-        group: agent.groupId,
-      });
+      const zones = await this.access.accessibleZoneIds(
+        agent,
+        await this.access.settings(),
+      );
+      // Assignées à lui, à son groupe, ou ouvertes dans une zone qu'il peut choisir.
+      qb.andWhere(
+        `(m.assigneeAgentId = :me OR m.assigneeGroupId = :group
+          OR (m.assigneeAgentId IS NULL AND m.assigneeGroupId IS NULL
+              AND EXISTS (SELECT 1 FROM mission_zones mz WHERE mz.mission_id = m.id AND mz.zone_id = ANY(:zones))))`,
+        { me: user.id, group: agent.groupId, zones },
+      );
     } else if (
       user.role === Role.TeamLead &&
       !(await this.access.supervisesAll(user))
     ) {
       const groupIds = await this.access.leaderGroupIds(user.id);
       const agentIds = (await this.access.agentScope(user)) ?? [];
+      const zones = await this.leadZoneIds(user);
       qb.andWhere(
-        '(m.assigneeGroupId = ANY(:groupIds) OR m.assigneeAgentId = ANY(:agentIds))',
-        { groupIds, agentIds },
+        `(m.assigneeGroupId = ANY(:groupIds) OR m.assigneeAgentId = ANY(:agentIds)
+          OR (m.assigneeAgentId IS NULL AND m.assigneeGroupId IS NULL
+              AND (m.createdById = :lead
+                   OR EXISTS (SELECT 1 FROM mission_zones mz WHERE mz.mission_id = m.id AND mz.zone_id = ANY(:zones)))))`,
+        { groupIds, agentIds, zones, lead: user.id },
       );
     }
+    if (query.zoneId)
+      qb.andWhere(
+        'EXISTS (SELECT 1 FROM mission_zones mz WHERE mz.mission_id = m.id AND mz.zone_id = :zoneId)',
+        { zoneId: query.zoneId },
+      );
     // Les agents ne voient jamais les missions désactivées.
     if (user.role === Role.Agent || !query.includeInactive)
       qb.andWhere('m.isActive');
@@ -127,13 +162,27 @@ export class MissionsService {
       );
       for (const r of rows) myForms.set(r.id, r.n);
     }
+    const zones = await this.zonesOf(missions.map((x) => x.id));
+    const types = new Map<string, MissionType>();
     const items = [];
     for (const mission of missions) {
+      // Agent : ce que la mission lui rapporte, visible dès la liste.
+      let myEarnings: MissionEarnings | null | undefined;
+      if (user.role === Role.Agent) {
+        if (!types.has(mission.typeId))
+          types.set(mission.typeId, await this.types.get(mission.typeId));
+        myEarnings = await this.earnings(
+          user,
+          mission,
+          types.get(mission.typeId)!,
+        );
+      }
       items.push({
         ...this.view(user, mission),
+        zones: zones.get(mission.id) ?? [],
         progress: await this.progress(mission),
         ...(user.role === Role.Agent
-          ? { myForms: myForms.get(mission.id) ?? 0 }
+          ? { myForms: myForms.get(mission.id) ?? 0, myEarnings }
           : {}),
       });
     }
@@ -149,10 +198,12 @@ export class MissionsService {
     const type = await this.types.get(mission.typeId);
     const progress = await this.progress(mission);
     const contributions = await this.contributions(mission);
+    const zones = (await this.zonesOf([mission.id])).get(mission.id) ?? [];
     if (user.role === Role.Agent) {
       const mine = contributions.find((c) => c.agentId === user.id);
       return {
         ...this.view(user, mission),
+        zones,
         myEarnings: await this.earnings(user, mission, type),
         type: this.types.view(user, type),
         progress,
@@ -166,10 +217,77 @@ export class MissionsService {
     }
     return {
       ...this.view(user, mission),
+      zones,
       type: this.types.view(user, type),
       progress,
       contributions,
     };
+  }
+
+  /**
+   * Choix de la zone : pour chaque zone, les missions en cours qui concernent l'agent
+   * (assignées à lui, à son groupe, ou ouvertes), avec consignes, objectif, progression et
+   * ce qu'elles lui rapportent.
+   */
+  async forZones(user: AuthUser, zoneIds: string[]) {
+    const out = new Map<string, ZoneMission[]>();
+    if (!zoneIds.length) return out;
+    const agent = await this.access.getAgent(user.id);
+    const missions = await this.db.manager
+      .createQueryBuilder(Mission, 'm')
+      .where('m.isActive')
+      .andWhere("m.status NOT IN ('achieved', 'failed')")
+      .andWhere('(m.dueDate IS NULL OR m.dueDate > now())')
+      .andWhere(
+        'EXISTS (SELECT 1 FROM mission_zones mz WHERE mz.mission_id = m.id AND mz.zone_id = ANY(:zones))',
+        { zones: zoneIds },
+      )
+      .andWhere(
+        `(m.assigneeAgentId = :me OR m.assigneeGroupId = :group
+          OR (m.assigneeAgentId IS NULL AND m.assigneeGroupId IS NULL))`,
+        { me: user.id, group: agent.groupId },
+      )
+      .orderBy('m.dueDate', 'ASC', 'NULLS LAST')
+      .getMany();
+    const zones = await this.zonesOf(missions.map((x) => x.id));
+    const myForms = new Map<string, number>();
+    if (missions.length) {
+      const rows = await this.db.manager.query<{ id: string; n: number }[]>(
+        `SELECT mission_id AS id, count(*)::int AS n FROM mission_submissions
+         WHERE agent_id = $1 AND mission_id = ANY($2) GROUP BY mission_id`,
+        [user.id, missions.map((x) => x.id)],
+      );
+      for (const r of rows) myForms.set(r.id, r.n);
+    }
+    const types = new Map<string, MissionType>();
+    for (const mission of missions) {
+      if (!types.has(mission.typeId))
+        types.set(mission.typeId, await this.types.get(mission.typeId));
+      const type = types.get(mission.typeId)!;
+      const summary: ZoneMission = {
+        id: mission.id,
+        title: mission.title,
+        description: mission.description,
+        typeName: type.name,
+        fields: type.fields.map((f) => f.label),
+        progressMethod: mission.progressMethod,
+        targetValue: mission.targetValue,
+        dueDate: mission.dueDate,
+        status: mission.status,
+        assignment: mission.assigneeAgentId
+          ? 'agent'
+          : mission.assigneeGroupId
+            ? 'group'
+            : 'open',
+        progress: await this.progress(mission),
+        myForms: myForms.get(mission.id) ?? 0,
+        myEarnings: await this.earnings(user, mission, type),
+      };
+      for (const z of zones.get(mission.id) ?? [])
+        if (zoneIds.includes(z.id))
+          out.set(z.id, [...(out.get(z.id) ?? []), summary]);
+    }
+    return out;
   }
 
   /**
@@ -248,10 +366,10 @@ export class MissionsService {
 
   async create(user: AuthUser, dto: CreateMissionDto) {
     const m = this.db.manager;
-    if (!!dto.assigneeAgentId === !!dto.assigneeGroupId) {
+    if (dto.assigneeAgentId && dto.assigneeGroupId) {
       throw badRequest(
         'INVALID_ASSIGNEE',
-        'Assignez la mission à un agent ou à un groupe',
+        'Assignez la mission à un agent, à un groupe, ou à personne',
       );
     }
     const type = await this.types.get(dto.typeId);
@@ -276,6 +394,10 @@ export class MissionsService {
         );
       }
     }
+    await this.assertZones(user, dto.zoneIds, {
+      agentId: dto.assigneeAgentId,
+      groupId: dto.assigneeGroupId,
+    });
     if (dto.dueDate) await this.assertNotPast(new Date(dto.dueDate));
     if (dto.pay) await this.assertCanSetPay(user);
     if (dto.progressMethod !== ProgressMethod.Manual && !dto.targetValue) {
@@ -304,6 +426,7 @@ export class MissionsService {
       createdById: user.id,
       pay: dto.pay ? normalizePay(dto.pay) : null,
     });
+    await this.setZones(saved.id, dto.zoneIds);
     await this.notifications.notify(await this.assigneeIds(saved), {
       type: 'mission.assigned',
       title: 'Nouvelle mission',
@@ -315,6 +438,15 @@ export class MissionsService {
 
   async update(user: AuthUser, id: string, dto: UpdateMissionDto) {
     const mission = await this.findManageable(user, id);
+    const { zoneIds, ...fields } = dto;
+    if (zoneIds) {
+      await this.assertZones(user, zoneIds, {
+        agentId: mission.assigneeAgentId ?? undefined,
+        groupId: mission.assigneeGroupId ?? undefined,
+      });
+      await this.setZones(id, zoneIds);
+    }
+    dto = fields;
     if (mission.progressMethod === ProgressMethod.Manual)
       delete dto.targetValue;
     // Une échéance déjà passée peut être gardée telle quelle, pas déplacée dans le passé.
@@ -414,12 +546,40 @@ export class MissionsService {
         { at: submittedAt },
       )
       .getOne();
+    // Pendant une journée, dans une zone de la mission (réglable par la structure).
+    const settings = await this.access.settings();
+    const zones = (await this.zonesOf([missionId])).get(missionId) ?? [];
+    const inMissionZone = !!day && zones.some((z) => z.id === day.zoneId);
+    if (settings.submissionRequiresDay) {
+      if (!day)
+        throw conflict(
+          'DAY_REQUIRED',
+          'Démarrez votre journée pour envoyer un formulaire',
+        );
+      if (!inMissionZone)
+        throw conflict(
+          'WRONG_ZONE',
+          `Cette mission se fait à : ${zones.map((z) => z.name).join(', ')}`,
+        );
+    }
+    // Position saisie hors du périmètre de la zone (marge de tolérance des sorties de zone).
+    let outOfZone = !!day && !inMissionZone;
+    if (!outOfZone && day && dto.lat != null && dto.lng != null) {
+      const [row] = await m.query<{ inside: boolean }[]>(
+        `SELECT ST_DWithin(area::geography, ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography, $4) AS inside
+         FROM zones WHERE id = $1`,
+        [day.zoneId, dto.lng, dto.lat, settings.zoneExitToleranceMeters],
+      );
+      outOfZone = row ? !row.inside : false;
+    }
 
     const saved = await m.save(MissionSubmission, {
       tenantId: this.db.tenantId,
       missionId,
       agentId: user.id,
       dayId: day?.id ?? null,
+      zoneId: day?.zoneId ?? null,
+      outOfZone,
       clientId: dto.clientId,
       data,
       lat: dto.lat ?? null,
@@ -565,7 +725,16 @@ export class MissionsService {
       const assigned =
         mission.assigneeAgentId === user.id ||
         (!!mission.assigneeGroupId &&
-          mission.assigneeGroupId === agent.groupId);
+          mission.assigneeGroupId === agent.groupId) ||
+        (!mission.assigneeAgentId &&
+          !mission.assigneeGroupId &&
+          (await this.inZones(
+            mission.id,
+            await this.access.accessibleZoneIds(
+              agent,
+              await this.access.settings(),
+            ),
+          )));
       if (!assigned || !mission.isActive) throw notFound('Mission');
       return mission;
     }
@@ -585,9 +754,16 @@ export class MissionsService {
     if (await this.access.supervisesAll(user)) return mission;
     if (mission.assigneeAgentId) {
       await this.access.assertCanManageAgent(user, mission.assigneeAgentId);
+    } else if (!mission.assigneeGroupId) {
+      // Mission ouverte : celle qu'il a créée, ou dans une zone qu'il encadre.
+      if (
+        mission.createdById !== user.id &&
+        !(await this.inZones(mission.id, await this.leadZoneIds(user)))
+      )
+        throw forbidden();
     } else if (
       !(await this.access.leaderGroupIds(user.id)).includes(
-        mission.assigneeGroupId!,
+        mission.assigneeGroupId,
       )
     ) {
       throw forbidden();
@@ -595,12 +771,144 @@ export class MissionsService {
     return mission;
   }
 
+  /** Zones actives de chaque mission. */
+  private async zonesOf(
+    missionIds: string[],
+  ): Promise<Map<string, { id: string; name: string }[]>> {
+    const out = new Map<string, { id: string; name: string }[]>();
+    if (!missionIds.length) return out;
+    const rows = await this.db.manager.query<
+      { missionId: string; id: string; name: string }[]
+    >(
+      `SELECT mz.mission_id AS "missionId", z.id, z.name
+       FROM mission_zones mz JOIN zones z ON z.id = mz.zone_id AND z.is_active
+       WHERE mz.mission_id = ANY($1) ORDER BY z.name`,
+      [missionIds],
+    );
+    for (const r of rows)
+      out.set(r.missionId, [
+        ...(out.get(r.missionId) ?? []),
+        { id: r.id, name: r.name },
+      ]);
+    return out;
+  }
+
+  private async setZones(missionId: string, zoneIds: string[]) {
+    await this.db.manager.query(
+      `DELETE FROM mission_zones WHERE mission_id = $1`,
+      [missionId],
+    );
+    await this.db.manager.query(
+      `INSERT INTO mission_zones (mission_id, zone_id, tenant_id)
+       SELECT $1, unnest($2::uuid[]), $3`,
+      [missionId, zoneIds, this.db.tenantId],
+    );
+  }
+
+  /** La mission se fait-elle dans l'une de ces zones ? */
+  private async inZones(missionId: string, zoneIds: string[]) {
+    if (!zoneIds.length) return false;
+    const [row] = await this.db.manager.query<unknown[]>(
+      `SELECT 1 FROM mission_zones WHERE mission_id = $1 AND zone_id = ANY($2) LIMIT 1`,
+      [missionId, zoneIds],
+    );
+    return !!row;
+  }
+
+  /** Zones qu'un chef encadre : celles de ses groupes, plus les zones libres. */
+  private async leadZoneIds(user: AuthUser): Promise<string[]> {
+    const rows = await this.db.manager.query<{ id: string }[]>(
+      `SELECT z.id FROM zones z
+       WHERE z.is_active AND (
+         EXISTS (SELECT 1 FROM group_zones gz JOIN groups g ON g.id = gz.group_id AND g.is_active
+                 WHERE gz.zone_id = z.id AND g.leader_id = $1)
+         OR NOT EXISTS (SELECT 1 FROM group_zones gz JOIN groups g ON g.id = gz.group_id AND g.is_active
+                        WHERE gz.zone_id = z.id))`,
+      [user.id],
+    );
+    return rows.map((r) => r.id);
+  }
+
+  /**
+   * Zones d'une mission : actives ; pour un chef, dans son périmètre ; pour un groupe, parmi
+   * ses zones ou les zones libres ; pour un agent, parmi celles qu'il peut choisir.
+   */
+  private async assertZones(
+    user: AuthUser,
+    zoneIds: string[],
+    assignee: { agentId?: string; groupId?: string },
+  ) {
+    const zones = await this.db.manager.query<
+      { id: string; name: string; groupIds: string[] }[]
+    >(
+      `SELECT z.id, z.name,
+              ARRAY(SELECT gz.group_id::text FROM group_zones gz JOIN groups g ON g.id = gz.group_id AND g.is_active
+                    WHERE gz.zone_id = z.id) AS "groupIds"
+       FROM zones z WHERE z.id = ANY($1) AND z.is_active`,
+      [zoneIds],
+    );
+    if (zones.length !== zoneIds.length)
+      throw badRequest('INVALID_ZONES', 'Zone inconnue ou désactivée');
+    const refuse = (code: string, message: string) => {
+      throw badRequest(code, message);
+    };
+    if (
+      user.role === Role.TeamLead &&
+      !(await this.access.supervisesAll(user))
+    ) {
+      const mine = await this.leadZoneIds(user);
+      const outside = zones.find((z) => !mine.includes(z.id));
+      if (outside)
+        refuse(
+          'ZONE_OUTSIDE_SCOPE',
+          `« ${outside.name} » n’est pas une zone de vos groupes`,
+        );
+    }
+    if (assignee.groupId) {
+      const outside = zones.find(
+        (z) => z.groupIds.length && !z.groupIds.includes(assignee.groupId!),
+      );
+      if (outside)
+        refuse(
+          'ZONE_OUTSIDE_GROUP',
+          `« ${outside.name} » est réservée à un autre groupe`,
+        );
+    }
+    if (assignee.agentId) {
+      const agent = await this.access.getAgent(assignee.agentId);
+      const open = await this.access.accessibleZoneIds(
+        agent,
+        await this.access.settings(),
+      );
+      const outside = zones.find((z) => !open.includes(z.id));
+      if (outside)
+        refuse(
+          'ZONE_NOT_ACCESSIBLE',
+          `L’agent ne peut pas choisir la zone « ${outside.name} »`,
+        );
+    }
+  }
+
   private async assigneeIds(mission: Mission): Promise<string[]> {
     if (mission.assigneeAgentId) return [mission.assigneeAgentId];
+    if (!mission.assigneeGroupId) {
+      // Mission ouverte : les agents qui peuvent choisir une de ses zones.
+      const zones = (await this.zonesOf([mission.id])).get(mission.id) ?? [];
+      const settings = await this.access.settings();
+      const agents = await this.db.manager.find(User, {
+        where: { role: Role.Agent, isActive: true },
+      });
+      const ids: string[] = [];
+      for (const agent of agents) {
+        const open = await this.access.accessibleZoneIds(agent, settings);
+        if (zones.some((z) => open.includes(z.id))) ids.push(agent.id);
+      }
+      return ids;
+    }
     const agents = await this.db.manager.find(User, {
       select: { id: true },
       where: {
-        groupId: mission.assigneeGroupId!,
+        groupId: mission.assigneeGroupId,
         role: Role.Agent,
         isActive: true,
       },

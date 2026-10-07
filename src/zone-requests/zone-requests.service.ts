@@ -71,12 +71,7 @@ export class ZoneRequestsService {
     const settings = await this.access.settings();
     const agent = await this.access.getAgent(user.id);
 
-    if (settings.useGroups && !agent.groupId) {
-      throw conflict(
-        'NO_GROUP',
-        "Vous n'êtes rattaché à aucun groupe. Contactez votre administrateur.",
-      );
-    }
+    // Sans groupe, l'agent choisit parmi les zones libres (contrôle des zones accessibles).
     if (await this.openDay(agent.id)) {
       throw conflict(
         'DAY_STARTED',

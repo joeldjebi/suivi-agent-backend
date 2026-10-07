@@ -8,6 +8,8 @@ import {
 import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
+  ArrayMinSize,
+  ArrayUnique,
   IsArray,
   IsBoolean,
   IsDateString,
@@ -133,7 +135,15 @@ export class CreateMissionDto {
   @IsString()
   description?: string;
 
-  /** Agent assigné (exclusif avec assigneeGroupId) */
+  /** Zones où la mission se fait (au moins une) : l'agent la voit en choisissant l'une d'elles */
+  @IsArray()
+  @ArrayMinSize(1, { message: 'Choisissez au moins une zone' })
+  @ArrayMaxSize(100)
+  @ArrayUnique()
+  @IsUUID('all', { each: true })
+  zoneIds: string[];
+
+  /** Agent assigné (exclusif avec assigneeGroupId) ; ni agent ni groupe : ouverte à tous les agents de ses zones */
   @IsOptional()
   @IsUUID()
   assigneeAgentId?: string;
@@ -178,6 +188,15 @@ export class UpdateMissionDto extends PartialType(
     'dueDate',
   ] as const),
 ) {
+  /** Nouvelles zones de la mission (remplacent les précédentes) */
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1, { message: 'Choisissez au moins une zone' })
+  @ArrayMaxSize(100)
+  @ArrayUnique()
+  @IsUUID('all', { each: true })
+  zoneIds?: string[];
+
   /** false = désactiver (plus proposée aux agents) ; true = réactiver */
   @IsOptional()
   @IsBoolean()
@@ -212,6 +231,11 @@ export class ListMissionsQuery extends PaginationQuery {
   @IsOptional()
   @IsUUID()
   typeId?: string;
+
+  /** Missions qui se font dans cette zone */
+  @IsOptional()
+  @IsUUID()
+  zoneId?: string;
 
   /** Plus récentes (défaut), échéance la plus proche, ou titre */
   @IsOptional()

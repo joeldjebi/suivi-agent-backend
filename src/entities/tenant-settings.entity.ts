@@ -105,6 +105,10 @@ export class TenantSettings {
   @Column({ name: 'alert_mocked' })
   alertMocked: boolean;
 
+  /** Formulaires acceptés seulement pendant une journée dans une zone de la mission */
+  @Column({ name: 'submission_requires_day' })
+  submissionRequiresDay: boolean;
+
   /** Heure d'envoi du bilan de fin de journée aux responsables (HH:MM) ; vide : pas d'envoi */
   @Column({ name: 'daily_report_time', type: 'text', nullable: true })
   dailyReportTime: string | null;
