@@ -61,6 +61,7 @@ services:
       args:
         VITE_PLATFORM_PATH: ${VITE_PLATFORM_PATH:-}
         VITE_TILE_URL: ${VITE_TILE_URL:-}
+        VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
     restart: unless-stopped
     ports:
       - "${PUBLIC_PORT:-8090}:80"

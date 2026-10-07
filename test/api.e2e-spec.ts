@@ -27,6 +27,10 @@ import {
   YOPOUGON,
 } from './helpers';
 import { PushService, type PushMessage } from '../src/common/push.service';
+import {
+  AppVersionService,
+  compareVersions,
+} from '../src/app-version/app-version';
 
 type Body = Record<string, any>;
 
@@ -2071,6 +2075,87 @@ describe('Alerte sécurité (SOS)', () => {
       .expect(409)
       .expect((r) => expect(r.body.code).toBe('AUTO_RESOLVED'));
     await t.admin.api.post('/safety/sos', {}).expect(403);
+  });
+});
+
+describe('Version minimale de l’app mobile', () => {
+  it('app trop ancienne : 426 avec le lien de mise à jour ; web jamais bloqué', async () => {
+    const versions = app.get(AppVersionService);
+    const t = await newTenant(app);
+    const agent = await t.createUser('agent');
+    expect((await new Api(app).get('/app/version').expect(200)).body).toEqual({
+      minVersion: null,
+      latestVersion: null,
+      androidUrl: null,
+      iosUrl: null,
+    });
+    // Aucune version imposée : tout passe.
+    await agent.api.get('/me/team').set('X-App-Version', '0.0.1').expect(200);
+
+    await owner.query(
+      `UPDATE platform_settings SET min_app_version = '1.2.0', latest_app_version = '1.3.0',
+         android_store_url = 'https://exemple.ci/app.apk', ios_store_url = 'https://apps.apple.com/app/id1'`,
+    );
+    versions.invalidate();
+    try {
+      await agent.api
+        .get('/me/team')
+        .set('X-App-Version', '1.1.9')
+        .expect(426)
+        .expect((r) =>
+          expect(r.body).toMatchObject({
+            code: 'APP_UPDATE_REQUIRED',
+            minVersion: '1.2.0',
+            storeUrl: 'https://exemple.ci/app.apk',
+          }),
+        );
+      await agent.api
+        .get('/me/team')
+        .set('X-App-Version', '1.1.9')
+        .set('X-App-Platform', 'ios')
+        .expect(426)
+        .expect((r) =>
+          expect(r.body.storeUrl).toBe('https://apps.apple.com/app/id1'),
+        );
+      // Ancienne app sans en-tête de version : reconnue à son agent HTTP.
+      await agent.api
+        .get('/me/team')
+        .set('User-Agent', 'Dart/3.10 (dart:io)')
+        .expect(426);
+      // Connexion refusée aussi (avant même l'identification).
+      await new Api(app)
+        .post('/auth/login', { phone: '0700000000', password: 'x' })
+        .set('X-App-Version', '1.0.0')
+        .expect(426);
+      // À jour, ou plus récente.
+      await agent.api.get('/me/team').set('X-App-Version', '1.2.0').expect(200);
+      await agent.api
+        .get('/me/team')
+        .set('X-App-Version', '1.10.0')
+        .expect(200);
+      // Le site web n'est jamais concerné, ni la santé et la version.
+      await agent.api.get('/me/team').expect(200);
+      await new Api(app)
+        .get('/health')
+        .set('X-App-Version', '1.0.0')
+        .expect(200);
+      await new Api(app)
+        .get('/app/version')
+        .set('X-App-Version', '1.0.0')
+        .expect(200);
+    } finally {
+      await owner.query(
+        `UPDATE platform_settings SET min_app_version = NULL, latest_app_version = NULL,
+           android_store_url = NULL, ios_store_url = NULL`,
+      );
+      versions.invalidate();
+    }
+  });
+
+  it('comparaison des versions', () => {
+    expect(compareVersions('1.10.0', '1.9.3')).toBeGreaterThan(0);
+    expect(compareVersions('1.2.0', '1.2.0')).toBe(0);
+    expect(compareVersions('1.2.0+7', '1.2.1')).toBeLessThan(0);
   });
 });
 

@@ -1,3 +1,4 @@
+import { AppVersionService } from '../app-version/app-version';
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
@@ -125,6 +126,7 @@ export class PlatformService {
     private readonly notifications: NotificationsService,
     private readonly throttle: LoginThrottle,
     private readonly tenantData: PlatformTenantService,
+    private readonly appVersions: AppVersionService,
   ) {}
 
   // ------------------------------------------------------------ journal
@@ -1197,7 +1199,10 @@ export class PlatformService {
       sort: dto.sort ?? next,
       isActive: dto.isActive ?? true,
     });
-    this.db.afterCommit(() => this.subscriptions.invalidateAll());
+    this.db.afterCommit(() => {
+      this.subscriptions.invalidateAll();
+      this.appVersions.invalidate();
+    });
     await this.log(admin, 'plan.create', null, {
       code: dto.code,
       name: dto.name,

@@ -3,8 +3,10 @@ import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { initMonitoring } from './common/monitoring';
 
 async function bootstrap() {
+  initMonitoring();
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   // Derrière un proxy (Nginx, Traefik) : vraie adresse du client pour le journal,
   // la liste blanche et le verrouillage de la connexion éditeur (ex. TRUST_PROXY=1).

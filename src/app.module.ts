@@ -1,4 +1,7 @@
 import { AppOnboardingModule } from './app-onboarding/app-onboarding.module';
+import { MonitoringInterceptor } from './common/monitoring.interceptor';
+import { AppVersionGuard } from './app-version/app-version';
+import { AppVersionModule } from './app-version/app-version.module';
 import { BroadcastsModule } from './broadcasts/broadcasts.module';
 import { PhotosModule } from './photos/photos.module';
 import { DevicesModule } from './devices/devices.module';
@@ -81,6 +84,7 @@ import { ZonesModule } from './zones/zones.module';
     MeModule,
     DevicesModule,
     BroadcastsModule,
+    AppVersionModule,
     PhotosModule,
     DocsModule,
     ZoneRequestsModule,
@@ -103,10 +107,13 @@ import { ZonesModule } from './zones/zones.module';
   controllers: [AppController],
   providers: [
     AppService,
+    // Avant tout : une app trop ancienne est invitée à se mettre à jour.
+    { provide: APP_GUARD, useExisting: AppVersionGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
     { provide: APP_GUARD, useExisting: SubscriptionGuard },
     // L'audit enveloppe la transaction : il n'écrit qu'une fois la requête terminée.
+    { provide: APP_INTERCEPTOR, useClass: MonitoringInterceptor },
     { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
     // Annonce des mises à jour aux appareils, après l'enregistrement.
     { provide: APP_INTERCEPTOR, useClass: SyncInterceptor },

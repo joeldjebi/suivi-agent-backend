@@ -16,6 +16,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  IsUrl,
   ValidateIf,
 } from 'class-validator';
 import {
@@ -413,6 +414,28 @@ export class UpdatePlatformSettingsDto {
   @IsOptional()
   @Matches(PLAN_CODE_PATTERN)
   defaultPlanCode?: PlanCode;
+
+  /** App mobile : version minimale (x.y.z), vide pour ne rien imposer */
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @Matches(/^\d+\.\d+\.\d+$/, { message: 'Version au format 1.2.0' })
+  minAppVersion?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @Matches(/^\d+\.\d+\.\d+$/, { message: 'Version au format 1.2.0' })
+  latestAppVersion?: string | null;
+
+  /** Lien de téléchargement Android (Play Store ou fichier APK) */
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsUrl({ require_protocol: true })
+  androidStoreUrl?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsUrl({ require_protocol: true })
+  iosStoreUrl?: string | null;
 }
 
 export class TenantUsersQuery extends PaginationQuery {

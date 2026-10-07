@@ -39,6 +39,7 @@
     "@nestjs/swagger": "^11.4.7",
     "@nestjs/typeorm": "^11.0.3",
     "@nestjs/websockets": "^11.2.7",
+    "@sentry/node": "^11.5.0",
     "@suivi/shared": "file:./shared",
     "bcrypt": "^6.0.0",
     "class-transformer": "^0.5.1",

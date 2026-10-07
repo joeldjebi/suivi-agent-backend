@@ -86,6 +86,20 @@ export class PlatformSettings {
   /** Formule attribuée à une nouvelle structure (elle s'applique à la fin de l'essai) */
   @Column({ name: 'default_plan_code', type: 'text' })
   defaultPlanCode: PlanCode;
+
+  /** App mobile : en dessous, mise à jour obligatoire (ex. 1.2.0) */
+  @Column({ name: 'min_app_version', type: 'text', nullable: true })
+  minAppVersion: string | null;
+
+  /** Dernière version publiée : mise à jour proposée */
+  @Column({ name: 'latest_app_version', type: 'text', nullable: true })
+  latestAppVersion: string | null;
+
+  @Column({ name: 'android_store_url', type: 'text', nullable: true })
+  androidStoreUrl: string | null;
+
+  @Column({ name: 'ios_store_url', type: 'text', nullable: true })
+  iosStoreUrl: string | null;
 }
 
 @Entity('subscriptions')
