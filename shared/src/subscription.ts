@@ -52,6 +52,8 @@ export const Feature = {
   Audit: 'audit',
   /** Calcul automatique de la rémunération des agents et des chefs d'équipe */
   Payroll: 'payroll',
+  /** Notifications sur les téléphones, même app fermée (Firebase Cloud Messaging) */
+  PushNotifications: 'push_notifications',
 } as const;
 export type Feature = (typeof Feature)[keyof typeof Feature];
 
@@ -61,6 +63,13 @@ export type Feature = (typeof Feature)[keyof typeof Feature];
  */
 export const DEFAULT_PLAN_FEATURES: Record<string, Feature[]> = {
   base: [],
-  advanced: [Feature.Groups, Feature.ManualApproval, Feature.Missions, Feature.Branding, Feature.Exports],
+  advanced: [
+    Feature.Groups,
+    Feature.ManualApproval,
+    Feature.Missions,
+    Feature.Branding,
+    Feature.Exports,
+    Feature.PushNotifications,
+  ],
   enterprise: Object.values(Feature),
 };

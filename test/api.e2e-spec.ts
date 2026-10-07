@@ -1419,7 +1419,7 @@ describe('Notifications push', () => {
 
       // Application désinstallée : Firebase signale le jeton, il est oublié.
       invalid = [leadToken];
-      await push.sendToUsers([lead.id], {
+      await push.sendToUsers(t.tenantId, [lead.id], {
         type: 'team.message',
         title: 'Test',
       });
@@ -1430,11 +1430,34 @@ describe('Notifications push', () => {
       ).toHaveLength(0);
       // Plus de téléphone : rien n'est envoyé.
       const before = sent.length;
-      await push.sendToUsers([lead.id], {
+      await push.sendToUsers(t.tenantId, [lead.id], {
         type: 'team.message',
         title: 'Test',
       });
       expect(sent.length).toBe(before);
+
+      // Formule sans notifications push (Base) : rien, sauf les avis d'abonnement.
+      await lead.api
+        .post('/devices', { token: leadToken, platform: 'ios' })
+        .expect(204);
+      await owner.query(
+        `UPDATE subscriptions SET plan_code = 'base', status = 'active', trial_ends_at = NULL WHERE tenant_id = $1`,
+        [t.tenantId],
+      );
+      app.get(SubscriptionsService).invalidate(t.tenantId);
+      const count = sent.length;
+      await push.sendToUsers(t.tenantId, [lead.id], {
+        type: 'team.message',
+        title: 'Réunion',
+      });
+      expect(sent.length).toBe(count);
+      await push.sendToUsers(t.tenantId, [lead.id], {
+        type: 'subscription.suspended',
+        title: 'Abonnement suspendu',
+      });
+      expect(sent.at(-1)?.message.type).toBe('subscription.suspended');
+      // Structure de test retirée : la formule Base redevient inutilisée.
+      await owner.query(`DELETE FROM tenants WHERE id = $1`, [t.tenantId]);
     } finally {
       push.transport = null;
     }
@@ -3189,7 +3212,7 @@ describe('Abonnement des structures', () => {
       'enterprise',
     ]);
     const me = (await t.admin.api.get('/auth/me').expect(200)).body;
-    expect(me.subscription.features).toHaveLength(9);
+    expect(me.subscription.features).toHaveLength(10);
     await t.admin.api.get('/stats/overview').expect(200);
 
     // Engagement annuel : remise, et pas de retour au mensuel avant son terme.
@@ -5373,7 +5396,7 @@ describe('Espace éditeur (super administrateur)', () => {
       })
       .expect(200);
     const upgraded = (await admin.get('/auth/me').expect(200)).body;
-    expect(upgraded.subscription.features).toHaveLength(9);
+    expect(upgraded.subscription.features).toHaveLength(10);
     expect(upgraded.settings).toMatchObject({
       useGroups: true,
       approvalMode: 'manual',
@@ -5542,7 +5565,7 @@ describe('Espace éditeur (super administrateur)', () => {
       planCode: 'base',
     });
     // Essai : toutes les fonctionnalités, quotas de la formule d'essai.
-    expect(sub.features).toHaveLength(9);
+    expect(sub.features).toHaveLength(10);
     expect(sub.usage.agents.limit).toBe(30);
     await sa
       .patch('/platform/settings', {

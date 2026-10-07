@@ -48,7 +48,7 @@ export class NotificationsService {
         );
       }
       // Push : une fois les données enregistrées, sans retarder la requête.
-      void this.push.sendToUsers(unique, {
+      void this.push.sendToUsers(tenantId, unique, {
         type: input.type,
         title: input.title,
         body: input.body,

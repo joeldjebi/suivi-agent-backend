@@ -1,7 +1,11 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { readFileSync } from 'fs';
+import { Feature } from '@suivi/shared';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { DbService } from './db.service';
+
+type MulticastMessage = import('firebase-admin/messaging').MulticastMessage;
 
 /** Notification à afficher sur le téléphone (titre, texte) et données pour l'app. */
 export interface PushMessage {
@@ -37,7 +41,7 @@ function stringify(data: Record<string, unknown>): Record<string, string> {
 }
 
 /** Firebase Cloud Messaging (Android et iPhone, via la clé APNs du projet Firebase). */
-class FirebaseTransport implements PushTransport {
+export class FirebaseTransport implements PushTransport {
   constructor(
     private readonly messaging: import('firebase-admin/messaging').Messaging,
   ) {}
@@ -48,32 +52,60 @@ class FirebaseTransport implements PushTransport {
   ) {
     const data = stringify({ ...(message.data ?? {}), type: message.type });
     const category = PUSH_CATEGORIES[message.type];
-    const response = await this.messaging.sendEachForMulticast({
-      tokens: tokens.map((t) => t.token),
-      notification: {
-        title: message.title,
-        ...(message.body ? { body: message.body } : {}),
-      },
-      data,
-      android: {
-        priority: 'high',
-        notification: { channelId: 'suivi_agent', sound: 'default' },
-      },
-      apns: {
-        payload: {
-          aps: { sound: 'default', ...(category ? { category } : {}) },
+    // Android n'affiche pas de boutons sur une notification envoyée telle quelle : les
+    // notifications à boutons partent en données, l'app les affiche elle-même.
+    const actionable = category
+      ? tokens.filter((t) => t.platform === 'android')
+      : [];
+    const standard = tokens.filter((t) => !actionable.includes(t));
+    const batches: { tokens: typeof tokens; message: MulticastMessage }[] = [];
+    if (standard.length)
+      batches.push({
+        tokens: standard,
+        message: {
+          tokens: standard.map((t) => t.token),
+          notification: {
+            title: message.title,
+            ...(message.body ? { body: message.body } : {}),
+          },
+          data,
+          android: {
+            priority: 'high',
+            notification: { channelId: 'suivi_agent', sound: 'default' },
+          },
+          apns: {
+            payload: {
+              aps: { sound: 'default', ...(category ? { category } : {}) },
+            },
+          },
         },
-      },
-    });
+      });
+    if (actionable.length)
+      batches.push({
+        tokens: actionable,
+        message: {
+          tokens: actionable.map((t) => t.token),
+          data: {
+            ...data,
+            title: message.title,
+            ...(message.body ? { body: message.body } : {}),
+            category: category,
+          },
+          android: { priority: 'high' },
+        },
+      });
     const invalid: string[] = [];
-    response.responses.forEach((r, i) => {
-      const code = r.error?.code ?? '';
-      if (
-        code === 'messaging/registration-token-not-registered' ||
-        code === 'messaging/invalid-registration-token'
-      )
-        invalid.push(tokens[i].token);
-    });
+    for (const batch of batches) {
+      const response = await this.messaging.sendEachForMulticast(batch.message);
+      response.responses.forEach((r, i) => {
+        const code = r.error?.code ?? '';
+        if (
+          code === 'messaging/registration-token-not-registered' ||
+          code === 'messaging/invalid-registration-token'
+        )
+          invalid.push(batch.tokens[i].token);
+      });
+    }
     return { invalid };
   }
 }
@@ -93,6 +125,7 @@ export class PushService implements OnModuleInit {
   constructor(
     private readonly db: DbService,
     private readonly config: ConfigService,
+    private readonly subscriptions: SubscriptionsService,
   ) {}
 
   async onModuleInit() {
@@ -127,11 +160,26 @@ export class PushService implements OnModuleInit {
     return this.transport !== null;
   }
 
-  /** Envoi aux téléphones de ces utilisateurs ; les jetons périmés sont oubliés. */
-  async sendToUsers(userIds: string[], message: PushMessage): Promise<void> {
+  /**
+   * Envoi aux téléphones de ces utilisateurs, si la formule de leur structure inclut les
+   * notifications push (sauf avis sur l'abonnement lui-même, toujours envoyés) ; les jetons
+   * périmés sont oubliés.
+   */
+  async sendToUsers(
+    tenantId: string,
+    userIds: string[],
+    message: PushMessage,
+  ): Promise<void> {
     const transport = this.transport;
     if (!transport || !userIds.length) return;
     try {
+      const billing =
+        message.type.startsWith('subscription.') ||
+        message.type.startsWith('invoice.');
+      if (!billing) {
+        const { features } = await this.subscriptions.summary(tenantId);
+        if (!features.includes(Feature.PushNotifications)) return;
+      }
       const tokens = await this.db.runAsSystem(() =>
         this.db.manager.query<{ token: string; platform: string }[]>(
           `SELECT token, platform FROM push_devices WHERE user_id = ANY($1)`,

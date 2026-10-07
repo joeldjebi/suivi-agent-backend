@@ -61,9 +61,9 @@ export async function resetDatabase(app: INestApplication, owner: DataSource) {
                      included_leads = v.leads, extra_agent_price = v.extra, features = v.features
     FROM (VALUES
       ('base', 5000, 10, 1, 500, ARRAY[]::text[]),
-      ('advanced', 15000, 30, 3, 450, ARRAY['groups', 'manual_approval', 'missions', 'branding', 'exports']),
+      ('advanced', 15000, 30, 3, 450, ARRAY['groups', 'manual_approval', 'missions', 'branding', 'exports', 'push_notifications']),
       ('enterprise', 40000, 100, 10, 400, ARRAY['groups', 'manual_approval', 'missions', 'branding', 'exports',
-                                                'stats', 'team_leads', 'audit', 'payroll'])
+                                                'stats', 'team_leads', 'audit', 'payroll', 'push_notifications'])
     ) AS v(code, price, agents, leads, extra, features)
     WHERE plans.code = v.code`);
   const redis = app.get(RedisService).client;
