@@ -55,6 +55,10 @@ Commencez par l’article **Avant de commencer : les prérequis**. Si vous êtes
 
 > Astuce : le menu **Bien démarrer**, en haut à gauche, coche les étapes au fur et à mesure et vous emmène directement au bon écran.
 
+[Ouvrir « Bien démarrer »](/start)
+
+Dans chaque étape, les boutons ouvrent directement le bon écran, avec le formulaire de création prêt à remplir.
+
 ## Étape 0 — Ce qu’il vous faut avant de commencer
 
 - **Un ordinateur** avec un navigateur à jour (Chrome, Edge, Firefox ou Safari) pour le back-office.
@@ -70,6 +74,8 @@ Commencez par l’article **Avant de commencer : les prérequis**. Si vous êtes
 
 Menu **Paramètres**.
 
+[Ouvrir les paramètres](/settings)
+
 1. Vérifiez le **fuseau horaire** (Afrique/Abidjan par défaut).
 2. Choisissez la **durée de travail par jour** (8 h par défaut). C’est l’objectif affiché à chaque agent dans l’application.
 3. Dans **Alertes des responsables**, indiquez l’**heure de début attendue** : un agent qui démarre après cette heure est signalé « en retard ».
@@ -82,6 +88,8 @@ Menu **Paramètres**.
 
 Menu **Zones** → **Nouvelle zone**.
 
+[Dessiner une zone](/zones?new=1) [Voir mes zones](/zones)
+
 1. Donnez un **nom clair** (ex. « Cocody Angré »).
 2. **Dessinez le contour** sur la carte, point par point, puis fermez la forme.
 3. Indiquez une **capacité** si vous voulez limiter le nombre d’agents en même temps dans la zone (laissez vide sinon).
@@ -91,6 +99,8 @@ Menu **Zones** → **Nouvelle zone**.
 
 ## Étape 3 — Créer vos chefs d’équipe et vos groupes
 
+[Ajouter un chef d’équipe](/users?new=team_lead) [Créer un groupe](/groups?new=1) [Voir mes groupes](/groups)
+
 1. Menu **Utilisateurs** → **Nouvel utilisateur**, rôle **Chef d’équipe** : nom, e-mail, numéro et mot de passe initial.
 2. Menu **Groupes** → **Nouveau groupe** : nom de l’équipe (ex. « Équipe Nord ») et son **chef**.
 3. Ouvrez le groupe et cochez ses **zones** : ses agents ne pourront choisir que celles-là (et les zones libres).
@@ -99,6 +109,8 @@ Menu **Zones** → **Nouvelle zone**.
 ## Étape 4 — Ajouter vos agents
 
 Menu **Utilisateurs** → **Nouvel utilisateur**, rôle **Agent**.
+
+[Ajouter un agent](/users?new=agent) [Voir mes agents](/users)
 
 1. Renseignez prénom, nom, e-mail et **numéro de téléphone** (vérifiez-le bien : c’est son identifiant).
 2. Choisissez son **groupe**.
@@ -110,6 +122,8 @@ Menu **Utilisateurs** → **Nouvel utilisateur**, rôle **Agent**.
 
 Menu **Types de missions** → **Nouveau type**.
 
+[Créer un type de mission](/mission-types?new=1) [Voir mes types](/mission-types)
+
 1. Nommez le type (ex. « Prospection commerciale »).
 2. Ajoutez les **champs** que l’agent remplit à chaque visite : texte, nombre, oui/non, date ou liste de choix.
 3. Cochez **obligatoire** pour les informations indispensables.
@@ -118,6 +132,8 @@ Menu **Types de missions** → **Nouveau type**.
 ## Étape 6 — Lancer vos missions
 
 Menu **Missions** → **Nouvelle mission**.
+
+[Créer une mission](/missions?new=1) [Voir mes missions](/missions)
 
 1. Choisissez le **type** (le formulaire) et donnez un **titre** clair (ex. « 200 visites à Adjamé »).
 2. Écrivez les **consignes** : ce que l’agent doit faire, ce qu’il doit dire.
@@ -130,6 +146,8 @@ Menu **Missions** → **Nouvelle mission**.
 
 Menu **Rémunération**.
 
+[Créer une grille de paie](/pay?new=1) [Voir la rémunération](/pay)
+
 1. Choisissez la **période de paie** (mensuelle par défaut).
 2. Créez une **grille pour les agents** : fixe, montant par journée validée, par formulaire, primes d’objectif, retenues.
 3. Créez une **grille pour les chefs** : fixe et prime selon le travail de leur équipe.
@@ -138,6 +156,8 @@ Menu **Rémunération**.
 ## Étape 8 — Installer l’application sur les téléphones
 
 À faire une fois, avec chaque agent :
+
+[Personnaliser l’application](/branding) [Retrouver les numéros des agents](/users)
 
 1. **Installer Suivi Agent** (lien fourni par votre administrateur).
 2. Se connecter avec son **numéro de téléphone** et son mot de passe.
@@ -157,6 +177,8 @@ Côté agent, dans l’application :
 
 Côté chef et administrateur, dans le back-office :
 
+[Carte en temps réel](/map) [Alertes](/alerts) [Bilan du jour](/report) [Historique des journées](/history)
+
 1. **Carte en temps réel** : où sont vos agents, qui est hors zone.
 2. **Alertes** : retard, agent immobile, signal perdu, batterie faible, sortie de zone.
 3. **Bilan du jour** : qui a travaillé, combien de temps (et le % de la durée prévue), combien de formulaires.
@@ -170,6 +192,8 @@ Côté chef et administrateur, dans le back-office :
 - Chaque mission a **au moins une zone** et un **objectif**.
 - Chaque agent s’est **connecté une fois** à l’application, localisation « Toujours » autorisée.
 - Vous avez fait un **essai d’une demi-journée** avec un ou deux agents.
+
+[Contacter le support](/support)
 
 > Expliquez à vos agents que leur position n’est partagée **que pendant leur journée de travail**, jamais en dehors. Une question ? Écrivez-nous depuis le menu **Support**.`,
   },
