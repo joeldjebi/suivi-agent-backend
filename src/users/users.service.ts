@@ -189,6 +189,7 @@ export class UsersService {
       role: dto.role,
       groupId: dto.role === Role.Agent ? (dto.groupId ?? null) : null,
       onProbation: dto.onProbation ?? false,
+      workdayMinutes: dto.workdayMinutes ?? null,
       isActive: true,
     });
     return this.db.manager.findOneByOrFail(User, { id: created.id });

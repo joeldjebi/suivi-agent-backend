@@ -12,6 +12,12 @@ import { forbidden, notFound } from './business.exception';
 import { DbService } from './db.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 
+/** Durée de travail attendue et son origine. */
+export interface Workday {
+  minutes: number;
+  source: 'agent' | 'group' | 'structure';
+}
+
 /** Périmètre de chaque rôle : l'administrateur voit tout, le chef d'équipe ses groupes. */
 @Injectable()
 export class AccessService {
@@ -119,6 +125,35 @@ export class AccessService {
       [settings.useGroups, restricted, agent.groupId, agent.id],
     );
     return rows.map((r) => r.id);
+  }
+
+  /**
+   * Durée de travail attendue par jour pour chaque agent : la sienne, sinon celle de son
+   * groupe (actif, si la structure utilise les groupes), sinon celle de la structure.
+   */
+  async workdays(agentIds: string[]): Promise<Map<string, Workday>> {
+    const out = new Map<string, Workday>();
+    if (!agentIds.length) return out;
+    const settings = await this.settings();
+    const rows = await this.db.manager.query<
+      { id: string; own: number | null; group: number | null }[]
+    >(
+      `SELECT u.id, u.workday_minutes AS own,
+              CASE WHEN $2 THEN g.workday_minutes END AS "group"
+       FROM users u LEFT JOIN groups g ON g.id = u.group_id AND g.is_active
+       WHERE u.id = ANY($1)`,
+      [agentIds, settings.useGroups],
+    );
+    for (const r of rows)
+      out.set(
+        r.id,
+        r.own
+          ? { minutes: r.own, source: 'agent' }
+          : r.group
+            ? { minutes: r.group, source: 'group' }
+            : { minutes: settings.workdayMinutes, source: 'structure' },
+      );
+    return out;
   }
 
   /** Vérifie que l'utilisateur peut gérer cet agent et le renvoie. */

@@ -23,6 +23,10 @@ export class Group {
   @Column({ name: 'is_active', default: true })
   isActive: boolean;
 
+  /** Durée de travail attendue par jour, en minutes ; vide : celle du niveau au-dessus */
+  @Column({ name: 'workday_minutes', type: 'integer', nullable: true })
+  workdayMinutes: number | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 }

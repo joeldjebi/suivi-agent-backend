@@ -109,6 +109,10 @@ export class TenantSettings {
   @Column({ name: 'submission_requires_day' })
   submissionRequiresDay: boolean;
 
+  /** Durée de travail attendue par jour pour les agents, en minutes (8 h par défaut) */
+  @Column({ name: 'workday_minutes' })
+  workdayMinutes: number;
+
   /** Heure d'envoi du bilan de fin de journée aux responsables (HH:MM) ; vide : pas d'envoi */
   @Column({ name: 'daily_report_time', type: 'text', nullable: true })
   dailyReportTime: string | null;

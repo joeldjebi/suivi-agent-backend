@@ -23,6 +23,7 @@
     "seed": "ts-node src/database/seed.ts",
     "seed:demo": "ts-node src/database/seed.ts --reset --activity",
     "platform:admin": "ts-node src/database/platform-admin.ts",
+    "seed:structure": "ts-node src/database/structure.ts",
     "build:shared": "npm --prefix shared install --no-audit --no-fund && npm --prefix shared run build",
     "preinstall": "npm run build:shared"
   },

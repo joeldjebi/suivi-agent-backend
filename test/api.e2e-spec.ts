@@ -1336,6 +1336,94 @@ describe('Mon équipe (agent)', () => {
   });
 });
 
+describe('Durée de travail', () => {
+  it('structure, puis groupe, puis agent ; visible dans l’app, le bilan et l’historique', async () => {
+    const t = await newTenant(app);
+    await t.settings({ useGroups: true });
+    const zone = await t.createZone('Plateau', PLATEAU);
+    const lead = await t.createUser('team_lead');
+    const agent = await t.createUser('agent');
+    const partial = await t.createUser('agent');
+    const loner = await t.createUser('agent');
+    const group = await t.createGroup(
+      'Nord',
+      lead.id,
+      [agent.id, partial.id],
+      [zone.id],
+    );
+    const workday = async (api: Api) =>
+      (await api.get('/auth/me').expect(200)).body.workday as Body;
+
+    // Par défaut : 8 h, fixées par la structure.
+    expect(await workday(agent.api)).toEqual({
+      minutes: 480,
+      source: 'structure',
+    });
+    await t.admin.api.patch('/settings', { workdayMinutes: 20 }).expect(400);
+    await t.admin.api.patch('/settings', { workdayMinutes: 420 }).expect(200);
+    expect(await workday(loner.api)).toEqual({
+      minutes: 420,
+      source: 'structure',
+    });
+
+    // Le groupe, puis l'agent (temps partiel), l'emportent.
+    await t.admin.api
+      .patch(`/groups/${group.id}`, { workdayMinutes: 360 })
+      .expect(200);
+    await t.admin.api
+      .patch(`/users/${partial.id}`, { workdayMinutes: 240 })
+      .expect(200);
+    expect(await workday(agent.api)).toEqual({ minutes: 360, source: 'group' });
+    expect(await workday(partial.api)).toEqual({
+      minutes: 240,
+      source: 'agent',
+    });
+    expect(await workday(loner.api)).toEqual({
+      minutes: 420,
+      source: 'structure',
+    });
+    // Retour à la durée du niveau au-dessus.
+    await t.admin.api
+      .patch(`/users/${partial.id}`, { workdayMinutes: null })
+      .expect(200);
+    expect(await workday(partial.api)).toEqual({
+      minutes: 360,
+      source: 'group',
+    });
+    // Le profil des autres rôles ne porte pas de durée.
+    expect(
+      (await lead.api.get('/auth/me').expect(200)).body.workday,
+    ).toBeUndefined();
+
+    // Bilan du jour et historique : la durée attendue de chaque agent.
+    await agent.api.post('/zone-requests', { zoneId: zone.id }).expect(201);
+    await agent.api.post('/days/start').expect(200);
+    const report = (await t.admin.api.get('/reports/daily').expect(200)).body;
+    const row = (report.agents as Body[]).find((r) => r.id === agent.id)!;
+    expect(row.targetMinutes).toBe(360);
+    expect(
+      (report.agents as Body[]).find((r) => r.id === loner.id)!.targetMinutes,
+    ).toBe(420);
+    const history = (await t.admin.api.get('/days').expect(200)).body
+      .items as Body[];
+    expect(history[0]).toMatchObject({ agentId: agent.id, targetMinutes: 360 });
+
+    // Création d'un agent à temps partiel.
+    const created = await t.admin.api
+      .post('/users', {
+        email: uniqueEmail('mi-temps'),
+        password: PASSWORD,
+        firstName: 'Mi',
+        lastName: 'Temps',
+        role: 'agent',
+        phone: uniquePhone(),
+        workdayMinutes: 210,
+      })
+      .expect(201);
+    expect(created.body.workdayMinutes).toBe(210);
+  });
+});
+
 describe('Missions par zone', () => {
   it('zones obligatoires, missions ouvertes, choix de la zone, formulaires en journée', async () => {
     const t = await newTenant(app);

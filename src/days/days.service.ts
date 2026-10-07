@@ -201,8 +201,14 @@ export class DaysService {
       .skip((query.page - 1) * query.limit)
       .take(query.limit)
       .getManyAndCount();
+    const workdays = await this.access.workdays([
+      ...new Set(items.map((d) => d.agentId)),
+    ]);
     return {
-      items: items.map(withDurations),
+      items: items.map((d) => ({
+        ...withDurations(d),
+        targetMinutes: workdays.get(d.agentId)?.minutes ?? null,
+      })),
       total,
       page: query.page,
       limit: query.limit,

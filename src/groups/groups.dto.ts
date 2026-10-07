@@ -3,10 +3,14 @@ import {
   ArrayUnique,
   IsArray,
   IsBoolean,
+  IsInt,
   IsNotEmpty,
   IsOptional,
   IsString,
   IsUUID,
+  Max,
+  Min,
+  ValidateIf,
 } from 'class-validator';
 
 export class CreateGroupDto {
@@ -18,6 +22,14 @@ export class CreateGroupDto {
   @IsOptional()
   @IsUUID()
   leaderId?: string | null;
+
+  /** Durée de travail attendue par jour, en minutes (30 min à 24 h) ; null : celle du niveau au-dessus */
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsInt()
+  @Min(30)
+  @Max(1440)
+  workdayMinutes?: number | null;
 }
 
 export class UpdateGroupDto extends PartialType(CreateGroupDto) {

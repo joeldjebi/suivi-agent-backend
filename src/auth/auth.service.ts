@@ -33,6 +33,7 @@ import {
 } from './auth.dto';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { JwtPayload } from './jwt.strategy';
+import { AccessService } from '../common/access.service';
 
 const REFRESH_TOKEN_DAYS = 30;
 const BCRYPT_ROUNDS = 10;
@@ -61,6 +62,7 @@ export class AuthService {
     private readonly config: ConfigService,
     private readonly revocation: SessionRevocationService,
     private readonly subscriptions: SubscriptionsService,
+    private readonly access: AccessService,
   ) {}
 
   /** Inscription d'une structure : création de son espace et de son administrateur. */
@@ -192,6 +194,10 @@ export class AuthService {
       ),
       /** Formule, essai et fonctionnalités ouvertes : le web et le mobile s'y adaptent. */
       subscription,
+      /** Agent : durée de travail attendue par jour (objectif affiché dans l'app) */
+      ...(user.role === Role.Agent
+        ? { workday: (await this.access.workdays([user.id])).get(user.id) }
+        : {}),
     };
   }
 

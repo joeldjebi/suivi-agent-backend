@@ -38,6 +38,10 @@ export class User {
   @Column({ name: 'on_probation' })
   onProbation: boolean;
 
+  /** Durée de travail attendue par jour, en minutes ; vide : celle du niveau au-dessus */
+  @Column({ name: 'workday_minutes', type: 'integer', nullable: true })
+  workdayMinutes: number | null;
+
   @Column({ name: 'is_active' })
   isActive: boolean;
 

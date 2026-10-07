@@ -48,51 +48,130 @@ Commencez par l’article **Avant de commencer : les prérequis**. Si vous êtes
     section: 'Prise en main',
     title: 'Avant de commencer : les prérequis',
     summary:
-      'Le matériel, les informations et les réglages à préparer avant le premier jour.',
+      'Pas à pas, de la création du compte à la première journée : réglages, zones, équipes, agents, formulaires, missions, paie et application.',
     audience: STAFF,
     position: 15,
-    body: `Préparez ces éléments avant de lancer votre première équipe : la mise en route ne prend ensuite qu’une heure.
+    body: `Ce guide vous accompagne de la création de votre compte jusqu’à la première journée de vos agents. Suivez les étapes dans l’ordre : chacune prépare la suivante. Comptez **une à deux heures** pour tout mettre en place.
 
-## Le matériel
+> Astuce : le menu **Bien démarrer**, en haut à gauche, coche les étapes au fur et à mesure et vous emmène directement au bon écran.
 
-- **Un ordinateur avec un navigateur récent** (Chrome, Edge, Firefox ou Safari, à jour) pour le back-office : administrateurs et chefs d’équipe. Un écran d’au moins 13 pouces est conseillé pour la carte.
-- **Un smartphone par agent**, avec une **puce et un forfait data** actifs :
-  - Android 7.0 ou plus récent, ou iPhone sous iOS 13 ou plus récent ;
-  - **un GPS qui fonctionne** (testez une application de carte avant le premier jour) ;
-  - au moins **500 Mo d’espace libre** et une batterie en bon état. Une batterie externe est conseillée pour les longues journées.
-- **Un smartphone pour chaque chef d’équipe** qui suit son équipe sur le terrain (même configuration).
+## Étape 0 — Ce qu’il vous faut avant de commencer
 
-## Les informations à rassembler
+- **Un ordinateur** avec un navigateur à jour (Chrome, Edge, Firefox ou Safari) pour le back-office.
+- **Un smartphone par agent** : Android 7 ou plus récent, ou iPhone sous iOS 13 ou plus récent, avec une **puce, un forfait data et un GPS qui fonctionne**.
+- **Un smartphone par chef d’équipe** s’il suit son équipe sur le terrain.
+- **La liste de vos agents** : prénom, nom et **numéro de téléphone** (c’est leur identifiant de connexion : un numéro par personne).
+- **La liste de vos chefs d’équipe** : nom, numéro et adresse e-mail.
+- **Vos secteurs** : les quartiers où vos agents travaillent.
+- **Ce que vos agents notent à chaque visite** : nom du commerce, montant, produit… Ce seront vos formulaires.
+- **Vos règles de paie** (si vous utilisez la rémunération) : fixe, montant par journée, par formulaire, primes, retenues.
 
-- **La liste de vos agents** : prénom, nom et **numéro de téléphone** de chacun. Le numéro sert d’identifiant de connexion : il doit être unique et rester le même (l’agent ne peut pas le modifier lui-même).
-- **La liste des chefs d’équipe**, avec leur numéro et leur adresse e-mail.
-- **Vos secteurs de travail** : quartiers ou zones, avec, si besoin, le nombre maximum d’agents par zone.
-- **L’organisation de vos équipes** (selon votre formule) : quel chef, quels agents, quelles zones.
-- **Vos horaires** : heure de début attendue, jours travaillés, heure de fin de journée.
-- **Vos formulaires de terrain** (si vous utilisez les missions) : les informations que l’agent doit noter à chaque visite (nom du commerce, montant, choix…).
-- **Vos règles de rémunération** (formule Entreprise) : fixe, montant par journée, par formulaire, primes et retenues.
+## Étape 1 — Régler votre structure
 
-## Le compte administrateur
+Menu **Paramètres**.
 
-- Une **adresse e-mail** valide et un **mot de passe d’au moins 8 caractères**, gardé confidentiel.
-- Créez le compte depuis la page d’inscription : l’essai gratuit ouvre toutes les fonctionnalités.
+1. Vérifiez le **fuseau horaire** (Afrique/Abidjan par défaut).
+2. Choisissez la **durée de travail par jour** (8 h par défaut). C’est l’objectif affiché à chaque agent dans l’application.
+3. Dans **Alertes des responsables**, indiquez l’**heure de début attendue** : un agent qui démarre après cette heure est signalé « en retard ».
+4. Décidez si vous **utilisez des groupes** (une équipe = un chef + ses agents + ses zones). Recommandé dès que vous avez plus d’un chef.
+5. Choisissez la **validation des zones** : automatique (l’agent choisit librement) ou par le chef.
+6. Laissez activé **« Formulaires envoyés uniquement pendant une journée »** : c’est la garantie que le travail a bien été fait sur le terrain.
+7. Cliquez sur **Enregistrer**.
 
-## Les réglages des téléphones des agents
+## Étape 2 — Dessiner vos zones
 
-À faire une fois, sur chaque téléphone, avec l’agent :
+Menu **Zones** → **Nouvelle zone**.
 
-1. **Installer l’application** Suivi Agent (lien fourni par votre administrateur) et se connecter avec son numéro.
-2. **Autoriser la localisation « Toujours »** (et pas seulement « pendant l’utilisation ») : sans cela, le suivi s’arrête quand l’écran s’éteint.
-3. **Autoriser les notifications** : alertes de sortie de zone, messages du chef, réponses aux demandes.
-4. **Désactiver l’économie de batterie pour Suivi Agent** (Android : Paramètres → Batterie → Suivi Agent → Non restreinte) : sinon le téléphone coupe le suivi.
-5. Laisser **la date et l’heure en automatique**.
+1. Donnez un **nom clair** (ex. « Cocody Angré »).
+2. **Dessinez le contour** sur la carte, point par point, puis fermez la forme.
+3. Indiquez une **capacité** si vous voulez limiter le nombre d’agents en même temps dans la zone (laissez vide sinon).
+4. Recommencez pour chaque secteur. Deux zones ne doivent pas se chevaucher.
 
-## Informer vos équipes
+> Une zone rattachée à aucun groupe est une **zone libre** : tous les agents peuvent la choisir.
 
-- Expliquez à vos agents **quand leur position est partagée** : uniquement pendant leur journée de travail, jamais en dehors (et pas pendant la pause, sauf réglage contraire).
-- Faites un **essai d’une demi-journée** avec un ou deux agents avant de généraliser.
+## Étape 3 — Créer vos chefs d’équipe et vos groupes
 
-> Une question avant de commencer ? Écrivez-nous depuis le menu **Support**.`,
+1. Menu **Utilisateurs** → **Nouvel utilisateur**, rôle **Chef d’équipe** : nom, e-mail, numéro et mot de passe initial.
+2. Menu **Groupes** → **Nouveau groupe** : nom de l’équipe (ex. « Équipe Nord ») et son **chef**.
+3. Ouvrez le groupe et cochez ses **zones** : ses agents ne pourront choisir que celles-là (et les zones libres).
+4. Si toute l’équipe travaille moins longtemps (demi-journée), réglez sa **durée de travail** dans le groupe.
+
+## Étape 4 — Ajouter vos agents
+
+Menu **Utilisateurs** → **Nouvel utilisateur**, rôle **Agent**.
+
+1. Renseignez prénom, nom, e-mail et **numéro de téléphone** (vérifiez-le bien : c’est son identifiant).
+2. Choisissez son **groupe**.
+3. Pour un temps partiel, réglez sa **durée de travail** (sinon, il garde celle de son groupe ou de la structure).
+4. Donnez-lui un **mot de passe initial** : il pourra le changer depuis son profil.
+5. Notez numéro et mot de passe pour les lui remettre.
+
+## Étape 5 — Créer vos formulaires (types de missions)
+
+Menu **Types de missions** → **Nouveau type**.
+
+1. Nommez le type (ex. « Prospection commerciale »).
+2. Ajoutez les **champs** que l’agent remplit à chaque visite : texte, nombre, oui/non, date ou liste de choix.
+3. Cochez **obligatoire** pour les informations indispensables.
+4. Facultatif : réglez une **rémunération propre à ce type** (montant par formulaire, commission).
+
+## Étape 6 — Lancer vos missions
+
+Menu **Missions** → **Nouvelle mission**.
+
+1. Choisissez le **type** (le formulaire) et donnez un **titre** clair (ex. « 200 visites à Adjamé »).
+2. Écrivez les **consignes** : ce que l’agent doit faire, ce qu’il doit dire.
+3. Choisissez **pour qui** : un agent, un groupe, ou **ouverte à tous** les agents qui travaillent dans ses zones.
+4. Cochez **une ou plusieurs zones** : la mission se fait uniquement là. L’agent la voit en choisissant sa zone du jour, avec ses consignes et ce qu’elle lui rapporte.
+5. Fixez l’**objectif** : un nombre de formulaires, une somme (ex. montant des commandes) ou une validation par le chef.
+6. Ajoutez une **échéance**.
+
+## Étape 7 — Régler la rémunération (si votre formule l’inclut)
+
+Menu **Rémunération**.
+
+1. Choisissez la **période de paie** (mensuelle par défaut).
+2. Créez une **grille pour les agents** : fixe, montant par journée validée, par formulaire, primes d’objectif, retenues.
+3. Créez une **grille pour les chefs** : fixe et prime selon le travail de leur équipe.
+4. En fin de période, la paie se **calcule toute seule** : vous la vérifiez, la validez, puis la marquez payée.
+
+## Étape 8 — Installer l’application sur les téléphones
+
+À faire une fois, avec chaque agent :
+
+1. **Installer Suivi Agent** (lien fourni par votre administrateur).
+2. Se connecter avec son **numéro de téléphone** et son mot de passe.
+3. Autoriser la **localisation « Toujours »** (pas seulement « pendant l’utilisation »).
+4. Autoriser les **notifications**.
+5. Sur Android : **désactiver l’économie de batterie** pour Suivi Agent (Paramètres → Batterie → Suivi Agent → Non restreinte).
+6. Laisser **la date et l’heure en automatique**.
+
+## Étape 9 — La première journée
+
+Côté agent, dans l’application :
+
+1. **Choisir sa zone** : il voit les missions de chaque zone et ce qu’elles rapportent.
+2. **Démarrer sa journée** en arrivant dans la zone.
+3. **Remplir un formulaire** à chaque visite, depuis la mission (même sans réseau : l’envoi se fait au retour du réseau).
+4. **Terminer sa journée** en partant.
+
+Côté chef et administrateur, dans le back-office :
+
+1. **Carte en temps réel** : où sont vos agents, qui est hors zone.
+2. **Alertes** : retard, agent immobile, signal perdu, batterie faible, sortie de zone.
+3. **Bilan du jour** : qui a travaillé, combien de temps (et le % de la durée prévue), combien de formulaires.
+4. **Historique des journées** et **Missions** : la progression jour après jour.
+
+## Avant de vous lancer : la liste de contrôle
+
+- Les réglages sont enregistrés (fuseau, durée de travail, heure de début).
+- Chaque agent a un **groupe** ou a accès à une **zone libre**.
+- Chaque groupe a un **chef** et au moins **une zone**.
+- Chaque mission a **au moins une zone** et un **objectif**.
+- Chaque agent s’est **connecté une fois** à l’application, localisation « Toujours » autorisée.
+- Vous avez fait un **essai d’une demi-journée** avec un ou deux agents.
+
+> Expliquez à vos agents que leur position n’est partagée **que pendant leur journée de travail**, jamais en dehors. Une question ? Écrivez-nous depuis le menu **Support**.`,
   },
   {
     slug: 'mettre-en-place',

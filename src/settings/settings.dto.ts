@@ -187,6 +187,13 @@ export class UpdateSettingsDto {
   @IsBoolean()
   alertMocked?: boolean;
 
+  /** Durée de travail attendue par jour pour les agents, en minutes (30 min à 24 h) */
+  @IsOptional()
+  @IsInt()
+  @Min(30)
+  @Max(1440)
+  workdayMinutes?: number;
+
   /** Formulaires acceptés seulement pendant une journée dans une zone de la mission */
   @IsOptional()
   @IsBoolean()

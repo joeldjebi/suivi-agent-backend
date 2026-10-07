@@ -5,11 +5,15 @@ import {
   IsBoolean,
   IsEmail,
   IsIn,
+  IsInt,
   IsNotEmpty,
   IsOptional,
   IsString,
   IsUUID,
+  Max,
+  Min,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
 import { PaginationQuery } from '../common/pagination.dto';
 
@@ -47,6 +51,14 @@ export class CreateUserDto {
   @IsOptional()
   @IsBoolean()
   onProbation?: boolean;
+
+  /** Durée de travail attendue par jour, en minutes (30 min à 24 h) ; null : celle du niveau au-dessus */
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsInt()
+  @Min(30)
+  @Max(1440)
+  workdayMinutes?: number | null;
 }
 
 export class UpdateUserDto extends PartialType(CreateUserDto) {

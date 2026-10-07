@@ -59,6 +59,7 @@ export class GroupsService {
       tenantId: this.db.tenantId,
       name: dto.name,
       leaderId: dto.leaderId ?? null,
+      workdayMinutes: dto.workdayMinutes ?? null,
     });
   }
 

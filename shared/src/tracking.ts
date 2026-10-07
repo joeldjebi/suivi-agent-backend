@@ -121,6 +121,8 @@ export interface DailyReportAgent {
   endedAt: string | null;
   /** Temps travaillé, pauses déduites, en minutes */
   workedMinutes: number;
+  /** Durée de travail attendue (agent, groupe ou structure), en minutes */
+  targetMinutes: number | null;
   pausesMinutes: number;
   formsAccepted: number;
   formsRejected: number;

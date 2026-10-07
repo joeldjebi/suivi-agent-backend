@@ -106,6 +106,7 @@ export class ReportsService {
     const lateAfter = settings.alertStartTime
       ? toMinutes(settings.alertStartTime) + settings.alertLateMinutes
       : null;
+    const workdays = await this.access.workdays(agents.map((a) => a.id));
     const rows: DailyReportAgent[] = agents.map((a) => {
       const own = days.filter((d) => d.agentId === a.id);
       const first = own[0];
@@ -133,6 +134,7 @@ export class ReportsService {
             ? new Date(last.endedAt as string).toISOString()
             : null,
         workedMinutes: Math.round(sum('worked') / 60),
+        targetMinutes: workdays.get(a.id)?.minutes ?? null,
         pausesMinutes: Math.round(sum('pauses') / 60),
         formsAccepted: f?.accepted ?? 0,
         formsRejected: f?.rejected ?? 0,
