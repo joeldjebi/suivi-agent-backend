@@ -24,7 +24,9 @@ import {
   PlatformMfaLoginDto,
   CreateTenantDto,
   ListInvoicesQuery,
+  ErrorLogQuery,
   ListTenantsQuery,
+  ResolveErrorDto,
   PlatformLoginDto,
   PlatformPasswordDto,
   PlatformSubscriptionDto,
@@ -44,6 +46,7 @@ import {
   PlatformRoute,
   type PlatformUser,
 } from './platform-auth';
+import { ErrorLogService } from '../error-log/error-log.service';
 import { PlatformService } from './platform.service';
 import { PlatformTenantService } from './platform-tenant.service';
 import { clientIp, PlatformIpGuard } from './platform-security';
@@ -142,11 +145,40 @@ export class PlatformController {
   constructor(
     private readonly platform: PlatformService,
     private readonly tenantData: PlatformTenantService,
+    private readonly errors: ErrorLogService,
   ) {}
 
   @Get('dashboard')
   dashboard() {
     return this.platform.dashboard();
+  }
+
+  // Journal des erreurs (API, site, app)
+
+  @Get('errors')
+  async errorLog(@Query() query: ErrorLogQuery) {
+    await this.errors.prune();
+    return {
+      items: await this.errors.list(query.status ?? 'open', query.source),
+      summary: await this.errors.summary(),
+      // Lien vers les erreurs dans Sentry, s'il est configuré.
+      sentryUrl: process.env.SENTRY_ISSUES_URL || null,
+    };
+  }
+
+  @Get('errors/summary')
+  errorSummary() {
+    return this.errors.summary();
+  }
+
+  /** Corrigée (ou rouverte) : une erreur close qui se reproduit revient d'elle-même. */
+  @Post('errors/:id/resolve')
+  @HttpCode(204)
+  resolveError(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ResolveErrorDto,
+  ) {
+    return this.errors.resolve(id, dto.resolved ?? true);
   }
 
   // Structures

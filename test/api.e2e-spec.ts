@@ -1,4 +1,11 @@
-import { INestApplication } from '@nestjs/common';
+import {
+  BadRequestException,
+  type ExecutionContext,
+  INestApplication,
+} from '@nestjs/common';
+import { lastValueFrom, throwError } from 'rxjs';
+import { MonitoringInterceptor } from '../src/common/monitoring.interceptor';
+import { ErrorLogService } from '../src/error-log/error-log.service';
 import { io, Socket } from 'socket.io-client';
 import request from 'supertest';
 import { App } from 'supertest/types';
@@ -2156,6 +2163,130 @@ describe('Version minimale de l’app mobile', () => {
     expect(compareVersions('1.10.0', '1.9.3')).toBeGreaterThan(0);
     expect(compareVersions('1.2.0', '1.2.0')).toBe(0);
     expect(compareVersions('1.2.0+7', '1.2.1')).toBeLessThan(0);
+  });
+});
+
+describe('Journal des erreurs (console éditeur)', () => {
+  it('erreurs de l’API, du site et de l’app : regroupées, comptées, closes puis rouvertes', async () => {
+    await owner.query(`DELETE FROM platform_errors`);
+    const t = await newTenant(app);
+    const agent = await t.createUser('agent');
+
+    // Panne de l'API : remontée par l'intercepteur, regroupée malgré les identifiants.
+    const interceptor = new MonitoringInterceptor(app.get(ErrorLogService));
+    const context = (path: string) =>
+      ({
+        getType: () => 'http',
+        switchToHttp: () => ({
+          getRequest: () => ({
+            method: 'GET',
+            path,
+            route: { path: '/api/missions/:id' },
+            user: { id: agent.id, tenantId: t.tenantId },
+          }),
+        }),
+      }) as unknown as ExecutionContext;
+    for (const id of [randomUUID(), randomUUID()]) {
+      await expect(
+        lastValueFrom(
+          interceptor.intercept(context(`/api/missions/${id}`), {
+            handle: () =>
+              throwError(() => new Error(`Mission ${id} illisible`)),
+          }),
+        ),
+      ).rejects.toThrow();
+    }
+    // Un refus métier n'est pas une erreur.
+    await expect(
+      lastValueFrom(
+        interceptor.intercept(context('/api/missions/x'), {
+          handle: () =>
+            throwError(() => new BadRequestException('Formulaire invalide')),
+        }),
+      ),
+    ).rejects.toThrow();
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Erreurs du site et de l'app, envoyées par les utilisateurs connectés.
+    await agent.api
+      .post('/client-errors', {
+        source: 'mobile',
+        message: 'Null check operator used on a null value',
+        route: '/missions/123',
+        appVersion: '1.1.0',
+      })
+      .expect(204);
+    await agent.api
+      .post('/client-errors', { source: 'web', message: 'x is undefined' })
+      .expect(204);
+    await agent.api
+      .post('/client-errors', { source: 'serveur', message: 'x' })
+      .expect(400);
+    await new Api(app)
+      .post('/client-errors', { source: 'web', message: 'x' })
+      .expect(401);
+
+    const sa = await (async () => {
+      const email = uniqueEmail('sa-errors');
+      await owner.query(
+        `INSERT INTO platform_admins (email, password_hash, first_name, last_name) VALUES ($1, $2, 'Awa', 'Ops')`,
+        [email, await hashPassword('Editeur2026!')],
+      );
+      const res = await new Api(app)
+        .post('/platform/auth/login', { email, password: 'Editeur2026!' })
+        .expect(200);
+      return new Api(app, res.body.accessToken as string);
+    })();
+    type Item = {
+      id: string;
+      source: string;
+      message: string;
+      count: number;
+      tenantCount: number;
+      lastTenantName: string;
+      appVersion: string | null;
+    };
+    const list = async (q = '') =>
+      (await sa.get(`/platform/errors${q}`).expect(200)).body as {
+        items: Item[];
+        summary: { open: number; lastDay: number };
+      };
+    const all = await list();
+    expect(all.items).toHaveLength(3);
+    const api = all.items.find((e) => e.source === 'api')!;
+    const [{ name: tenantName }] = await owner.query<{ name: string }[]>(
+      `SELECT name FROM tenants WHERE id = $1`,
+      [t.tenantId],
+    );
+    expect(api).toMatchObject({
+      count: 2,
+      tenantCount: 1,
+      lastTenantName: tenantName,
+    });
+    expect(all.items.find((e) => e.source === 'mobile')).toMatchObject({
+      appVersion: '1.1.0',
+      count: 1,
+    });
+    expect(all.summary).toEqual({ open: 3, lastDay: 3 });
+    expect((await list('?source=web')).items).toHaveLength(1);
+
+    // Corrigée : retirée des erreurs en cours… puis rouverte si elle revient.
+    await sa.post(`/platform/errors/${api.id}/resolve`, {}).expect(204);
+    expect((await list()).items.map((e) => e.id)).not.toContain(api.id);
+    expect((await list('?status=resolved')).items[0].id).toBe(api.id);
+    await expect(
+      lastValueFrom(
+        interceptor.intercept(context(`/api/missions/${randomUUID()}`), {
+          handle: () =>
+            throwError(() => new Error(`Mission ${randomUUID()} illisible`)),
+        }),
+      ),
+    ).rejects.toThrow();
+    await new Promise((r) => setTimeout(r, 100));
+    expect((await list()).items.find((e) => e.id === api.id)?.count).toBe(3);
+
+    // Réservé à l'éditeur.
+    await agent.api.get('/platform/errors').expect(401);
   });
 });
 

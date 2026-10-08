@@ -465,3 +465,21 @@ export class AuditQuery extends PaginationQuery {
   @IsUUID()
   tenantId?: string;
 }
+
+export class ErrorLogQuery {
+  /** open (par défaut) : à traiter ; resolved : closes ; all : toutes */
+  @IsOptional()
+  @IsIn(['open', 'resolved', 'all'])
+  status?: 'open' | 'resolved' | 'all';
+
+  @IsOptional()
+  @IsIn(['api', 'web', 'mobile'])
+  source?: 'api' | 'web' | 'mobile';
+}
+
+export class ResolveErrorDto {
+  /** false : rouvrir l'erreur */
+  @IsOptional()
+  @IsBoolean()
+  resolved?: boolean;
+}

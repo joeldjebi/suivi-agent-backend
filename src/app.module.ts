@@ -2,6 +2,7 @@ import { AppOnboardingModule } from './app-onboarding/app-onboarding.module';
 import { MonitoringInterceptor } from './common/monitoring.interceptor';
 import { AppVersionGuard } from './app-version/app-version';
 import { AppVersionModule } from './app-version/app-version.module';
+import { ErrorLogModule } from './error-log/error-log.module';
 import { BroadcastsModule } from './broadcasts/broadcasts.module';
 import { PhotosModule } from './photos/photos.module';
 import { DevicesModule } from './devices/devices.module';
@@ -85,6 +86,7 @@ import { ZonesModule } from './zones/zones.module';
     DevicesModule,
     BroadcastsModule,
     AppVersionModule,
+    ErrorLogModule,
     PhotosModule,
     DocsModule,
     ZoneRequestsModule,

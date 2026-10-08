@@ -31,6 +31,11 @@ export function initMonitoring() {
   enabled = true;
 }
 
+/** Panne ou bug (les refus métier et les 4xx sont des réponses normales). */
+export function isUnexpected(error: unknown): boolean {
+  return !(error instanceof HttpException) || error.getStatus() >= 500;
+}
+
 /** Erreur inattendue : envoyée à Sentry (les refus métier et les 4xx ne le sont pas). */
 export function captureError(
   error: unknown,
