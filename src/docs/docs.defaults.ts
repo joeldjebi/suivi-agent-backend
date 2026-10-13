@@ -53,7 +53,11 @@ Commencez par l’article **Avant de commencer : les prérequis**. Si vous êtes
     position: 15,
     body: `Ce guide vous accompagne de la création de votre compte jusqu’à la première journée de vos agents. Suivez les étapes dans l’ordre : chacune prépare la suivante. Comptez **une à deux heures** pour tout mettre en place.
 
-> Astuce : le menu **Bien démarrer**, en haut à gauche, coche les étapes au fur et à mesure et vous emmène directement au bon écran.
+> Le plus rapide : l’**assistant de démarrage** prépare tout en 3 questions (votre métier, vos communes, vos agents) : zones, formulaires, une mission de la semaine et les comptes de vos agents. Vous ajustez ensuite ce qui doit l’être.
+
+[Lancer l’assistant](/setup)
+
+> Astuce : **Bien démarrer** (en haut du menu, ou menu **Aide**) coche les étapes au fur et à mesure et vous emmène directement au bon écran.
 
 [Ouvrir « Bien démarrer »](/start)
 
@@ -72,7 +76,7 @@ Dans chaque étape, les boutons ouvrent directement le bon écran, avec le formu
 
 ## Étape 1 — Régler votre structure
 
-Menu **Paramètres**.
+Menu **Paramètres** → onglet **Général**.
 
 [Ouvrir les paramètres](/settings)
 
@@ -86,7 +90,7 @@ Menu **Paramètres**.
 
 ## Étape 2 — Dessiner vos zones
 
-Menu **Zones** → **Nouvelle zone**.
+Menu **Zones** → **Nouvelle zone**. (L’assistant de démarrage crée aussi les zones de vos communes en un clic.)
 
 [Dessiner une zone](/zones?new=1) [Voir mes zones](/zones)
 
@@ -101,14 +105,14 @@ Menu **Zones** → **Nouvelle zone**.
 
 [Ajouter un chef d’équipe](/users?new=team_lead) [Créer un groupe](/groups?new=1) [Voir mes groupes](/groups)
 
-1. Menu **Utilisateurs** → **Nouvel utilisateur**, rôle **Chef d’équipe** : nom, e-mail, numéro et mot de passe initial.
-2. Menu **Groupes** → **Nouveau groupe** : nom de l’équipe (ex. « Équipe Nord ») et son **chef**.
+1. Menu **Équipe** → onglet **Chefs d’équipe** → **Créer un chef** : nom, e-mail, numéro et mot de passe initial.
+2. Menu **Équipe** → onglet **Groupes** → **Nouveau groupe** : nom de l’équipe (ex. « Équipe Nord ») et son **chef**.
 3. Ouvrez le groupe et cochez ses **zones** : ses agents ne pourront choisir que celles-là (et les zones libres).
 4. Si toute l’équipe travaille moins longtemps (demi-journée), réglez sa **durée de travail** dans le groupe.
 
 ## Étape 4 — Ajouter vos agents
 
-Menu **Utilisateurs** → **Nouvel utilisateur**, rôle **Agent**.
+Menu **Équipe** → onglet **Agents et comptes** → **Nouvel utilisateur**, rôle **Agent**.
 
 [Ajouter un agent](/users?new=agent) [Voir mes agents](/users)
 
@@ -118,11 +122,11 @@ Menu **Utilisateurs** → **Nouvel utilisateur**, rôle **Agent**.
 4. Donnez-lui un **mot de passe initial** : il pourra le changer depuis son profil.
 5. Notez numéro et mot de passe pour les lui remettre.
 
-## Étape 5 — Créer vos formulaires (types de missions)
+## Étape 5 — Créer vos formulaires
 
-Menu **Types de missions** → **Nouveau type**.
+Menu **Missions** → onglet **Formulaires** → **Nouveau type**. (L’assistant de démarrage propose des formulaires prêts à l’emploi selon votre métier.)
 
-[Créer un type de mission](/mission-types?new=1) [Voir mes types](/mission-types)
+[Créer un formulaire](/mission-types?new=1) [Voir mes formulaires](/mission-types)
 
 1. Nommez le type (ex. « Prospection commerciale »).
 2. Ajoutez les **champs** que l’agent remplit à chaque visite : texte, nombre, oui/non, date ou liste de choix.
@@ -131,11 +135,11 @@ Menu **Types de missions** → **Nouveau type**.
 
 ## Étape 6 — Lancer vos missions
 
-Menu **Missions** → **Nouvelle mission**.
+Menu **Missions** → onglet **Missions** → **Nouvelle mission**.
 
 [Créer une mission](/missions?new=1) [Voir mes missions](/missions)
 
-1. Choisissez le **type** (le formulaire) et donnez un **titre** clair (ex. « 200 visites à Adjamé »).
+1. Choisissez le **formulaire** et donnez un **titre** clair (ex. « 200 visites à Adjamé »).
 2. Écrivez les **consignes** : ce que l’agent doit faire, ce qu’il doit dire.
 3. Choisissez **pour qui** : un agent, un groupe, ou **ouverte à tous** les agents qui travaillent dans ses zones.
 4. Cochez **une ou plusieurs zones** : la mission se fait uniquement là. L’agent la voit en choisissant sa zone du jour, avec ses consignes et ce qu’elle lui rapporte.
@@ -157,7 +161,7 @@ Menu **Rémunération**.
 
 À faire une fois, avec chaque agent :
 
-[Personnaliser l’application](/branding) [Retrouver les numéros des agents](/users)
+[Personnaliser l’application (Paramètres → Application mobile)](/branding) [Retrouver les numéros des agents](/users)
 
 1. **Installer Suivi Agent** (lien fourni par votre administrateur).
 2. Se connecter avec son **numéro de téléphone** et son mot de passe.
@@ -177,12 +181,12 @@ Côté agent, dans l’application :
 
 Côté chef et administrateur, dans le back-office :
 
-[Carte en temps réel](/map) [Alertes](/alerts) [Bilan du jour](/report) [Historique des journées](/history)
+[Carte](/map) [Alertes](/alerts) [Bilan du jour](/report) [Historique des journées](/history)
 
-1. **Carte en temps réel** : où sont vos agents, qui est hors zone.
-2. **Alertes** : retard, agent immobile, signal perdu, batterie faible, sortie de zone.
-3. **Bilan du jour** : qui a travaillé, combien de temps (et le % de la durée prévue), combien de formulaires.
-4. **Historique des journées** et **Missions** : la progression jour après jour.
+1. **En direct** → **Carte** : où sont vos agents, qui est hors zone.
+2. **En direct** → **Alertes** : retard, agent immobile, signal perdu, batterie faible, sortie de zone.
+3. **Rapports** → **Bilan du jour** : qui a travaillé, combien de temps (et le % de la durée prévue), combien de formulaires.
+4. **Rapports** → **Historique des journées**, et **Missions** : la progression jour après jour.
 
 ## Avant de vous lancer : la liste de contrôle
 
@@ -195,7 +199,7 @@ Côté chef et administrateur, dans le back-office :
 
 [Contacter le support](/support)
 
-> Expliquez à vos agents que leur position n’est partagée **que pendant leur journée de travail**, jamais en dehors. Une question ? Écrivez-nous depuis le menu **Support**.`,
+> Expliquez à vos agents que leur position n’est partagée **que pendant leur journée de travail**, jamais en dehors. Une question ? Écrivez-nous depuis le menu **Aide** → **Support**.`,
   },
   {
     slug: 'mettre-en-place',
@@ -204,13 +208,13 @@ Côté chef et administrateur, dans le back-office :
     summary:
       'Les étapes pour être opérationnel : zones, équipes, comptes, réglages.',
     audience: ADMIN,
-    body: `Comptez une heure pour une première mise en place.
+    body: `Comptez une heure pour une première mise en place, ou quelques minutes avec l’**assistant de démarrage** (menu *Aide* → *Bien démarrer*) : il crée zones, formulaires, mission et agents à partir de 3 réponses.
 
 1. **Dessinez vos zones** (menu *Zones*) : les secteurs où vos agents travaillent. Indiquez une capacité si vous voulez limiter le nombre d’agents par zone.
-2. **Créez vos groupes** (menu *Groupes*, selon votre formule) : une équipe, son chef et les zones auxquelles elle a accès.
-3. **Ajoutez les utilisateurs** (menu *Utilisateurs*) : chefs d’équipe et agents. Les agents se connectent à l’application avec leur **numéro de téléphone** et le mot de passe que vous leur communiquez.
-4. **Réglez les paramètres** (menu *Paramètres*) : validation des zones, heure de remise à zéro, alertes des responsables.
-5. **Personnalisez l’application** (menu *Application mobile*, selon votre formule) : logo, couleurs, message d’accueil.
+2. **Créez vos groupes** (menu *Équipe* → *Groupes*, selon votre formule) : une équipe, son chef et les zones auxquelles elle a accès.
+3. **Ajoutez les utilisateurs** (menu *Équipe* → *Agents et comptes*) : chefs d’équipe et agents. Les agents se connectent à l’application avec leur **numéro de téléphone** et le mot de passe que vous leur communiquez.
+4. **Réglez les paramètres** (menu *Paramètres* → *Général*) : validation des zones, heure de remise à zéro, alertes des responsables.
+5. **Personnalisez l’application** (menu *Paramètres* → *Application mobile*, selon votre formule) : logo, couleurs, message d’accueil.
 6. **Faites installer l’application** à vos agents et testez une première journée avec l’un d’eux.
 
 > Conseil : commencez avec une équipe pilote d’une semaine avant d’étendre à toute la structure.`,
@@ -245,7 +249,7 @@ Cliquez sur un agent pour ouvrir sa fiche : zone, heure de début, dernière pos
     title: 'Les alertes',
     summary: 'Les situations à surveiller, et comment les prendre en charge.',
     audience: STAFF,
-    body: `Le menu *Alertes* rassemble les situations qui demandent l’attention d’un responsable. Le chef de l’agent est prévenu dès qu’une alerte s’ouvre ; elle se referme d’elle-même quand la situation se règle.
+    body: `Le menu *En direct* → onglet *Alertes* rassemble les situations qui demandent l’attention d’un responsable. Le chef de l’agent est prévenu dès qu’une alerte s’ouvre ; elle se referme d’elle-même quand la situation se règle.
 
 ## Les types d’alertes
 
@@ -272,7 +276,7 @@ Cliquez sur **Je m’en occupe** et notez ce que vous avez fait (« Appelé : en
 
 ## Valider une demande
 
-Le menu *Demandes de zone* liste les demandes en attente, avec leur délai d’expiration. **Accepter** confirme la place ; **Refuser** demande un motif, que l’agent voit.
+Le menu *En direct* → onglet *Demandes de zone* liste les demandes en attente, avec leur délai d’expiration. **Accepter** confirme la place ; **Refuser** demande un motif, que l’agent voit.
 
 ## Réaffecter un agent
 
@@ -288,7 +292,7 @@ Une demande sans réponse expire au bout du délai réglé dans *Paramètres* : 
     title: 'Historique des journées et trajets',
     summary: 'Heures de début et de fin, pauses, trajets et sorties de zone.',
     audience: STAFF,
-    body: `Le menu *Historique des journées* liste les journées de vos agents : début, pauses, fin et zone.
+    body: `Le menu *Rapports* → onglet *Historique des journées* liste les journées de vos agents : début, pauses, fin et zone.
 
 ## Le trajet d’une journée
 
@@ -306,7 +310,7 @@ Si votre structure l’a choisi, les journées encore ouvertes sont terminées a
     audience: STAFF,
     body: `Une zone est un secteur dessiné sur la carte où un agent travaille pendant sa journée.
 
-- **Créer** : cliquez sur *Nouvelle zone*, puis dessinez le contour point par point sur la carte. Deux zones ne peuvent pas se chevaucher.
+- **Créer** : cliquez sur *Nouvelle zone*, puis dessinez le contour point par point sur la carte. Deux zones ne peuvent pas se chevaucher. Plus simple : l’assistant de démarrage crée les zones de vos communes en les cochant.
 - **Capacité** : nombre maximum d’agents en même temps. Laissez vide pour ne pas limiter.
 - **Zone sensible** : peut demander une validation manuelle, même en mode mixte.
 - **Désactiver** : la zone n’est plus proposée, son historique est conservé.
@@ -316,10 +320,12 @@ Les agents ne voient que les zones auxquelles leur groupe a accès.`,
   {
     slug: 'equipes-et-comptes',
     section: 'Organisation',
-    title: 'Groupes et utilisateurs',
+    title: 'L’équipe : agents, chefs et groupes',
     summary: 'Organiser les équipes, créer les comptes, gérer les accès.',
     audience: ADMIN,
-    body: `## Groupes
+    body: `Tout se trouve dans le menu *Équipe* : onglets *Agents et comptes*, *Chefs d’équipe* et *Groupes*.
+
+## Groupes
 
 Un groupe réunit des agents, leur chef d’équipe et les zones auxquelles ils ont accès. Le chef valide les demandes de son groupe et en reçoit les alertes. Sans groupe, les chefs d’équipe supervisent toute la structure.
 
@@ -327,7 +333,7 @@ Un groupe réunit des agents, leur chef d’équipe et les zones auxquelles ils 
 
 - Créez un compte par personne. Les agents et chefs se connectent à l’application avec leur **numéro de téléphone** ; ils ne peuvent pas le modifier eux-mêmes.
 - **Désactiver** un compte bloque la connexion sans perdre l’historique.
-- Le nombre d’agents actifs compte dans votre abonnement (menu *Agents actifs*).`,
+- Le nombre d’agents actifs compte dans votre abonnement (menu *Paramètres* → *Facturation*).`,
   },
   {
     slug: 'missions',
@@ -337,9 +343,9 @@ Un groupe réunit des agents, leur chef d’équipe et les zones auxquelles ils 
     audience: STAFF,
     body: `Une mission fixe un objectif à un agent ou à un groupe, avec une échéance.
 
-## Types de missions
+## Formulaires
 
-Un type définit le formulaire que l’agent remplit à chaque visite ou action (texte, nombre, choix, photo…). Les administrateurs les créent dans *Types de missions*.
+Un formulaire (ou type de mission) définit ce que l’agent remplit à chaque visite ou action (texte, nombre, choix, photo…). Les administrateurs les créent dans le menu *Missions* → onglet *Formulaires*.
 
 ## Mesurer la progression
 
@@ -392,13 +398,13 @@ Les modifications s’appliquent immédiatement, y compris dans l’application 
     title: 'Abonnement et factures',
     summary: 'Formule, agents inclus, factures.',
     audience: ADMIN,
-    body: `Le menu *Abonnement* montre votre formule, ce qu’elle inclut, le nombre de chefs et d’agents inclus, et vos factures.
+    body: `Le menu *Paramètres* → onglet *Abonnement* montre votre formule, ce qu’elle inclut, le nombre de chefs et d’agents inclus, et vos factures.
 
 - **Changer de formule** : les fonctionnalités s’ouvrent aussitôt (cadenas dans le menu sinon).
 - **Agents supplémentaires** : au-delà des agents inclus, chaque agent actif est facturé selon votre formule.
 - **Essai gratuit** : toutes les fonctionnalités sont ouvertes pendant l’essai.
 
-Pour une question de facturation, écrivez au support (menu *Support*, catégorie « Facturation »).`,
+Pour une question de facturation, écrivez au support (menu *Aide* → *Support*, catégorie « Facturation »).`,
   },
   {
     slug: 'application-agent',
@@ -443,7 +449,7 @@ L’onglet *Missions* liste les objectifs et permet de remplir les formulaires, 
     title: 'Contacter le support',
     summary: 'Poser une question ou signaler un problème.',
     audience: STAFF,
-    body: `Le menu *Support* vous permet d’écrire à l’équipe Suivi Agent.
+    body: `Le menu *Aide* → onglet *Support* vous permet d’écrire à l’équipe Suivi Agent.
 
 1. Cliquez sur **Nouvelle demande**, choisissez une catégorie (question, problème, facturation, suggestion…) et décrivez la situation.
 2. Vous êtes prévenu dès que le support répond ; la réponse apparaît dans le fil de la demande.

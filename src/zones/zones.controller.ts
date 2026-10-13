@@ -19,6 +19,7 @@ import { CurrentUser, Roles } from '../common/decorators';
 import { DeleteQuery } from '../common/deletion';
 import { SetIdsDto } from '../groups/groups.dto';
 import { CreateZoneDto, UpdateZoneDto } from './zones.dto';
+import { PlacesService } from './places.service';
 import { ZonesService } from './zones.service';
 
 @ApiTags('Zones')
@@ -26,7 +27,10 @@ import { ZonesService } from './zones.service';
 @Roles(Role.Admin)
 @Controller('zones')
 export class ZonesController {
-  constructor(private readonly zones: ZonesService) {}
+  constructor(
+    private readonly zones: ZonesService,
+    private readonly places: PlacesService,
+  ) {}
 
   /** Administrateur : toutes les zones. Chef d'équipe : les zones de ses groupes. */
   @Roles(Role.Admin, Role.TeamLead)
@@ -45,6 +49,16 @@ export class ZonesController {
   @Get('available')
   available(@CurrentUser() user: AuthUser) {
     return this.zones.availableFor(user);
+  }
+
+  /**
+   * Recherche d'un lieu par son nom (commune, quartier, marché…) pour créer une zone :
+   * contour prêt à l'emploi, sans les parties déjà couvertes par d'autres zones.
+   */
+  @Get('places')
+  @ApiQuery({ name: 'q', required: true })
+  searchPlaces(@Query('q') q = '') {
+    return this.places.search(q.slice(0, 120));
   }
 
   @Roles(Role.Admin, Role.TeamLead)

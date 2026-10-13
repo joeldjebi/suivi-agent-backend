@@ -3,6 +3,8 @@ import { MonitoringInterceptor } from './common/monitoring.interceptor';
 import { AppVersionGuard } from './app-version/app-version';
 import { AppVersionModule } from './app-version/app-version.module';
 import { ErrorLogModule } from './error-log/error-log.module';
+import { SetupModule } from './setup/setup.module';
+import { OutletsModule } from './outlets/outlets.module';
 import { BroadcastsModule } from './broadcasts/broadcasts.module';
 import { PhotosModule } from './photos/photos.module';
 import { DevicesModule } from './devices/devices.module';
@@ -87,6 +89,8 @@ import { ZonesModule } from './zones/zones.module';
     BroadcastsModule,
     AppVersionModule,
     ErrorLogModule,
+    SetupModule,
+    OutletsModule,
     PhotosModule,
     DocsModule,
     ZoneRequestsModule,

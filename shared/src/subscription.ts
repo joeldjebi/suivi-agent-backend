@@ -54,6 +54,8 @@ export const Feature = {
   Payroll: 'payroll',
   /** Notifications sur les téléphones, même app fermée (Firebase Cloud Messaging) */
   PushNotifications: 'push_notifications',
+  /** Répertoire des points de vente : identification sur le terrain, statuts, import et export */
+  PointsOfSale: 'points_of_sale',
 } as const;
 export type Feature = (typeof Feature)[keyof typeof Feature];
 

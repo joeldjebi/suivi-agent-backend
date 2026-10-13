@@ -337,7 +337,8 @@ export class PlatformTenantService {
               (SELECT count(*) FROM pay_grids WHERE tenant_id = $1 AND is_active)::int AS "payGrids",
               (SELECT count(*) FROM pay_runs WHERE tenant_id = $1)::int AS "payRuns",
               (SELECT period FROM pay_settings WHERE tenant_id = $1) AS "payPeriod",
-              (SELECT count(*) FROM push_devices WHERE tenant_id = $1)::int AS devices`,
+              (SELECT count(*) FROM push_devices WHERE tenant_id = $1)::int AS devices,
+              (SELECT count(*) FROM outlets WHERE tenant_id = $1)::int AS outlets`,
       [tenantId],
     );
     const customBranding =
@@ -370,6 +371,9 @@ export class PlatformTenantService {
         : null,
       push_notifications: use.devices
         ? `${use.devices} téléphone${use.devices > 1 ? 's' : ''} joignable${use.devices > 1 ? 's' : ''}`
+        : null,
+      points_of_sale: use.outlets
+        ? `${use.outlets} point${use.outlets > 1 ? 's' : ''} de vente`
         : null,
     };
     return {

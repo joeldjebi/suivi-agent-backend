@@ -18,7 +18,7 @@ export interface PhotoMeta {
   takenAt: Date;
 }
 
-/** Photos géolocalisées des formulaires de mission. */
+/** Photos géolocalisées des formulaires de mission et des fiches de points de vente. */
 @Injectable()
 export class PhotosService {
   constructor(
@@ -69,16 +69,22 @@ export class PhotosService {
     return saved;
   }
 
-  /** L'image : l'agent voit les siennes, le chef celles de ses agents, l'administrateur toutes. */
+  /**
+   * L'image : l'agent voit les siennes, le chef celles de ses agents, l'administrateur toutes.
+   * Photo d'une fiche de point de vente : toute l'équipe qui voit le point de vente.
+   */
   async file(user: AuthUser, id: string) {
     const [row] = await this.db.manager.query<
-      { agentId: string; data: Buffer; mime: string }[]
+      { agentId: string; outletId: string | null; data: Buffer; mime: string }[]
     >(
-      `SELECT agent_id AS "agentId", data, mime FROM submission_photos WHERE id = $1`,
+      `SELECT agent_id AS "agentId", outlet_id AS "outletId", data, mime
+       FROM submission_photos WHERE id = $1`,
       [id],
     );
     if (!row) throw notFound('Photo');
-    if (user.role === Role.Agent) {
+    if (row.outletId) {
+      // Photo de fiche : visible par la structure (RLS) qui a accès aux points de vente.
+    } else if (user.role === Role.Agent) {
       if (row.agentId !== user.id) throw notFound('Photo');
     } else if (user.role === Role.TeamLead) {
       await this.access.assertCanManageAgent(user, row.agentId);
@@ -94,7 +100,7 @@ export class PhotosService {
     if (!ids.length) return;
     const rows = await this.db.manager.query<{ id: string }[]>(
       `SELECT id FROM submission_photos
-       WHERE id = ANY($1::uuid[]) AND agent_id = $2 AND submission_id IS NULL`,
+       WHERE id = ANY($1::uuid[]) AND agent_id = $2 AND submission_id IS NULL AND outlet_id IS NULL`,
       [ids, agentId],
     );
     if (rows.length !== new Set(ids).size)

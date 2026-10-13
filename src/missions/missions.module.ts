@@ -11,6 +11,6 @@ import { MissionsService } from './missions.service';
   imports: [PhotosModule],
   controllers: [MissionTypesController, MissionsController],
   providers: [MissionTypesService, MissionsService],
-  exports: [MissionsService],
+  exports: [MissionsService, MissionTypesService],
 })
 export class MissionsModule {}

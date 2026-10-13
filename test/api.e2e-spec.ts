@@ -488,6 +488,363 @@ describe('Zones', () => {
   });
 });
 
+describe('Points de vente', () => {
+  /** Point à ~`m` mètres au nord de `p`. */
+  const north = (p: { lat: number; lng: number }, m: number) => ({
+    lat: p.lat + m / 111_320,
+    lng: p.lng,
+  });
+
+  it('l’agent identifie un point de vente dans ses zones, sans doublon, et change son statut', async () => {
+    const t = await newTenant(app);
+    await t.createZone('Plateau', PLATEAU);
+    const agent = await t.createUser('agent');
+    await t.admin.api
+      .put('/outlets/form', {
+        fields: [
+          {
+            key: 'frigo',
+            label: 'Possède un frigo',
+            type: 'boolean',
+            required: true,
+          },
+          {
+            key: 'surface',
+            label: 'Surface (m²)',
+            type: 'number',
+            required: false,
+          },
+        ],
+      })
+      .expect(200);
+    const form = (await agent.api.get('/outlets/form').expect(200)).body;
+    expect(form.fields).toHaveLength(2);
+    expect(form.categories).toContain('Boutique');
+    expect(form.statuses[0]).toEqual({ value: 'new', label: 'Nouveau' });
+
+    const base = {
+      name: 'Boutique Awa',
+      category: 'Boutique',
+      phone: '07 07 07 07 07',
+      data: { frigo: true, surface: 12 },
+    };
+    await agent.api
+      .post('/outlets', { ...base, ...OUTSIDE })
+      .expect(409)
+      .expect((r) => expect(r.body.code).toBe('OUTLET_OUTSIDE_ZONES'));
+    await agent.api
+      .post('/outlets', { ...base, ...IN_PLATEAU, data: {} })
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('INVALID_FORM'));
+    const clientId = randomUUID();
+    const created = (
+      await agent.api
+        .post('/outlets', { ...base, ...IN_PLATEAU, clientId })
+        .expect(201)
+    ).body;
+    expect(created).toMatchObject({
+      name: 'Boutique Awa',
+      status: 'new',
+      phone: '+2250707070707',
+      zone: { name: 'Plateau' },
+      createdBy: { id: agent.id },
+      data: { frigo: true, surface: 12 },
+    });
+    expect(created.lat).toBeCloseTo(IN_PLATEAU.lat, 5);
+    // Renvoi hors ligne : la même fiche.
+    expect(
+      (
+        await agent.api
+          .post('/outlets', { ...base, ...IN_PLATEAU, clientId })
+          .expect(201)
+      ).body.id,
+    ).toBe(created.id);
+
+    // Même commerce à 10 m : l'agent doit confirmer.
+    const near = north(IN_PLATEAU, 10);
+    const dup = await agent.api
+      .post('/outlets', { ...base, name: 'BOUTIQUE AWA', ...near })
+      .expect(409);
+    expect(dup.body.code).toBe('OUTLET_DUPLICATE');
+    expect(dup.body.candidates[0]).toMatchObject({ id: created.id });
+    expect(dup.body.candidates[0].distance).toBeLessThanOrEqual(11);
+    // Autre commerce à 60 m : accepté sans question.
+    await agent.api
+      .post('/outlets', {
+        ...base,
+        name: 'Pharmacie du Port',
+        ...north(IN_PLATEAU, 60),
+      })
+      .expect(201);
+    await agent.api
+      .post('/outlets', {
+        ...base,
+        name: 'Boutique Awa 2',
+        ...near,
+        force: true,
+      })
+      .expect(201);
+
+    await agent.api
+      .post(`/outlets/${created.id}/status`, {
+        status: 'prospect',
+        comment: 'Intéressée par la nouvelle gamme',
+      })
+      .expect(200);
+    const detail = (await t.admin.api.get(`/outlets/${created.id}`).expect(200))
+      .body;
+    expect(detail.status).toBe('prospect');
+    expect(detail.history).toHaveLength(2);
+    expect(detail.history[0]).toMatchObject({
+      fromStatus: 'new',
+      toStatus: 'prospect',
+      comment: 'Intéressée par la nouvelle gamme',
+      user: { id: agent.id },
+    });
+
+    // L'agent ne déplace pas un point de vente déjà localisé ; il corrige ses informations.
+    await agent.api
+      .patch(`/outlets/${created.id}`, north(IN_PLATEAU, 30))
+      .expect(403);
+    await agent.api
+      .patch(`/outlets/${created.id}`, {
+        managerName: 'Awa Koné',
+        data: { surface: 20 },
+      })
+      .expect(200)
+      .expect((r) =>
+        expect(r.body).toMatchObject({
+          managerName: 'Awa Koné',
+          data: { frigo: true, surface: 20 },
+        }),
+      );
+
+    const list = (
+      await agent.api
+        .get(`/outlets?lat=${IN_PLATEAU.lat}&lng=${IN_PLATEAU.lng}&radius=100`)
+        .expect(200)
+    ).body;
+    expect(list.total).toBe(3);
+    expect(list.items[0].distance).toBe(0);
+    expect(list.items.map((o: Body) => o.distance)).toEqual(
+      [...list.items.map((o: Body) => o.distance)].sort((a, b) => a - b),
+    );
+    expect(list.counts).toMatchObject({ new: 2, prospect: 1, active: 0 });
+    expect(
+      (await agent.api.get('/outlets?status=prospect&q=awa').expect(200)).body
+        .total,
+    ).toBe(1);
+    expect(
+      (await t.admin.api.get('/outlets/map').expect(200)).body,
+    ).toHaveLength(3);
+  });
+
+  it('photo de la devanture : visible par l’équipe, réservée à sa fiche', async () => {
+    const t = await newTenant(app);
+    await t.createZone('Plateau', PLATEAU);
+    const agent = await t.createUser('agent');
+    const photo = (
+      await request(app.getHttpServer())
+        .post('/api/photos')
+        .set('Authorization', `Bearer ${agent.api.token}`)
+        .attach(
+          'file',
+          Buffer.from(
+            '89504e470d0a1a0a0000000d4948445200000001000000010806000000',
+            'hex',
+          ),
+          'devanture.png',
+        )
+        .field('clientId', randomUUID())
+        .field('takenAt', new Date().toISOString())
+        .expect(201)
+    ).body;
+    const outlet = (
+      await agent.api
+        .post('/outlets', {
+          name: 'Superette Bon Prix',
+          photoId: photo.id,
+          ...IN_PLATEAU,
+        })
+        .expect(201)
+    ).body;
+    expect(outlet.photoId).toBe(photo.id);
+    await t.admin.api.get(`/photos/${photo.id}`).expect(200);
+    // Déjà rattachée : une autre fiche ne la reprend pas.
+    await agent.api
+      .post('/outlets', {
+        name: 'Autre',
+        photoId: photo.id,
+        lat: IN_PLATEAU.lat + 0.005,
+        lng: IN_PLATEAU.lng,
+      })
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('PHOTO_MISSING'));
+  });
+
+  it('chacun voit les points de vente de ses zones', async () => {
+    const t = await newTenant(app);
+    await t.settings({ useGroups: true });
+    const plateau = await t.createZone('Plateau', PLATEAU);
+    const cocody = await t.createZone('Cocody', COCODY);
+    const lead = await t.createUser('team_lead');
+    const mine = await t.createUser('agent');
+    const other = await t.createUser('agent');
+    await t.createGroup('Nord', lead.id, [mine.id], [plateau.id]);
+    await t.createGroup('Est', null, [other.id], [cocody.id]);
+    const inCocody = { lat: 5.355, lng: -3.98 };
+    const far = (
+      await t.admin.api
+        .post('/outlets', { name: 'Maquis Est', ...inCocody })
+        .expect(201)
+    ).body;
+    const near = (
+      await mine.api
+        .post('/outlets', { name: 'Kiosque Nord', ...IN_PLATEAU })
+        .expect(201)
+    ).body;
+    // Hors de ses zones : ni ajout ni lecture.
+    await mine.api
+      .post('/outlets', { name: 'Ailleurs', ...inCocody })
+      .expect(409);
+    await mine.api.get(`/outlets/${far.id}`).expect(404);
+    await lead.api.get(`/outlets/${far.id}`).expect(404);
+    const names = async (actor: { api: Api }) =>
+      ((await actor.api.get('/outlets').expect(200)).body.items as Body[]).map(
+        (o) => o.name,
+      );
+    expect(await names(mine)).toEqual(['Kiosque Nord']);
+    expect(await names(lead)).toEqual(['Kiosque Nord']);
+    expect(await names(other)).toEqual(['Maquis Est']);
+    expect(await names(t.admin)).toEqual(['Kiosque Nord', 'Maquis Est']);
+    await lead.api.get(`/outlets/${near.id}`).expect(200);
+    // L'agent ne supprime pas.
+    await mine.api.delete(`/outlets/${near.id}`).expect(403);
+  });
+
+  it('import, fusion d’un doublon, export et formule', async () => {
+    const t = await newTenant(app);
+    await t.createZone('Plateau', PLATEAU);
+    await t.admin.api
+      .put('/outlets/form', {
+        fields: [
+          {
+            key: 'taille',
+            label: 'Taille',
+            type: 'select',
+            required: false,
+            options: ['Petit', 'Grand'],
+          },
+        ],
+      })
+      .expect(200);
+    const template = await t.admin.api
+      .get('/outlets/import/template')
+      .expect(200);
+    expect(template.headers['content-type']).toContain('spreadsheetml');
+
+    const csv = [
+      'Nom;Type;Téléphone;Latitude;Longitude;Statut;Taille',
+      `Boutique Awa;Boutique;0707070707;${IN_PLATEAU.lat};${IN_PLATEAU.lng};Prospect;grand`,
+      'Cave Koffi;Maquis / Bar;;;;Client actif;Petit',
+      ';Boutique;;;;;',
+      'Kiosque A;;;;;Endormi;',
+      'Kiosque B;;12;;;;',
+      `Boutique Awa;Boutique;0707070707;${IN_PLATEAU.lat};${IN_PLATEAU.lng};;`,
+      'Kiosque C;;;;;;Moyen',
+    ].join('\r\n');
+    const imported = (
+      await request(app.getHttpServer())
+        .post('/api/outlets/import')
+        .set('Authorization', `Bearer ${t.admin.api.token}`)
+        .attach('file', Buffer.from(csv, 'utf8'), 'points.csv')
+        .expect(201)
+    ).body;
+    expect(imported.created).toBe(2);
+    expect(imported.skippedCount).toBe(5);
+    expect(imported.skipped.map((s: Body) => s.row)).toEqual([4, 5, 6, 7, 8]);
+    expect(imported.skipped[3].reason).toBe('Déjà présent');
+
+    const all = (await t.admin.api.get('/outlets').expect(200)).body.items;
+    const awa = all.find((o: Body) => o.name === 'Boutique Awa');
+    const cave = all.find((o: Body) => o.name === 'Cave Koffi');
+    expect(awa).toMatchObject({
+      status: 'prospect',
+      data: { taille: 'Grand' },
+      zone: { name: 'Plateau' },
+    });
+    expect(cave).toMatchObject({ status: 'active', lat: null, zone: null });
+    expect(
+      (await t.admin.api.get('/outlets?unlocated=true').expect(200)).body.total,
+    ).toBe(1);
+
+    // Un agent localise le point de vente importé sans position.
+    const agent = await t.createUser('agent');
+    await agent.api
+      .patch(`/outlets/${cave.id}`, north(IN_PLATEAU, 300))
+      .expect(200)
+      .expect((r) => expect(r.body.zone).toMatchObject({ name: 'Plateau' }));
+
+    const merged = (
+      await t.admin.api
+        .post(`/outlets/${cave.id}/merge`, { intoId: awa.id })
+        .expect(200)
+    ).body;
+    expect(merged.history[0].comment).toBe('Fiche « Cave Koffi » fusionnée');
+    expect(merged.history).toHaveLength(3);
+    await t.admin.api.get(`/outlets/${cave.id}`).expect(404);
+
+    const exported = await t.admin.api
+      .get('/outlets/export?format=csv')
+      .expect(200);
+    expect(exported.text).toContain('Nom;Type;Statut;Zone');
+    expect(exported.text).toContain('Boutique Awa;Boutique;Prospect;Plateau');
+
+    await owner.query(
+      `UPDATE subscriptions SET plan_code = 'advanced', status = 'active', trial_ends_at = NULL WHERE tenant_id = $1`,
+      [t.tenantId],
+    );
+    app.get(SubscriptionsService).invalidate(t.tenantId);
+    await agent.api
+      .get('/outlets')
+      .expect(402)
+      .expect((r) => expect(r.body.code).toBe('FEATURE_NOT_IN_PLAN'));
+  });
+});
+
+describe('Recherche de lieux pour créer une zone', () => {
+  it('trouve une commune sans tenir compte des accents', async () => {
+    const t = await newTenant(app);
+    const res = await t.admin.api.get('/zones/places?q=adjame').expect(200);
+    expect(res.body[0]).toMatchObject({
+      name: 'Adjamé',
+      source: 'catalog',
+      trimmed: false,
+      overlaps: [],
+      area: { type: 'Polygon' },
+    });
+    expect(
+      (await t.admin.api.get('/zones/places?q=a').expect(200)).body,
+    ).toEqual([]);
+    const agent = await t.createUser('agent');
+    await agent.api.get('/zones/places?q=cocody').expect(403);
+  });
+
+  it('retire les parties déjà couvertes et la zone se crée telle quelle', async () => {
+    const t = await newTenant(app);
+    await t.createZone('Riviera', COCODY);
+    const res = await t.admin.api.get('/zones/places?q=Cocody').expect(200);
+    const place = res.body.find((p: Body) => p.name === 'Cocody');
+    expect(place).toMatchObject({ trimmed: true, overlaps: ['Riviera'] });
+    await t.admin.api
+      .post('/zones', { name: place.name, area: place.area })
+      .expect(201);
+    // Commune entièrement couverte : plus rien à proposer.
+    const again = await t.admin.api.get('/zones/places?q=Cocody').expect(200);
+    expect(again.body.find((p: Body) => p.name === 'Cocody')).toBeUndefined();
+  });
+});
+
 describe('Choix de zone — mode automatique, sans groupes', () => {
   it('approuve, gère le changement de zone et la capacité (RG-03, RG-08, RG-15)', async () => {
     const t = await newTenant(app);
@@ -1796,7 +2153,8 @@ describe('Formulaires avec photo et « Ma semaine »', () => {
     )
       .expect(400)
       .expect((r) => expect(r.body.code).toBe('PHOTO_FORMAT'));
-    await upload(lead, { clientId: randomUUID(), takenAt }).expect(403);
+    // Le chef prend aussi des photos (fiches des points de vente).
+    await upload(lead, { clientId: randomUUID(), takenAt }).expect(201);
 
     // Formulaire : photo obligatoire, valide, appartenant à l'agent.
     const submit = (data: object) =>
@@ -2287,6 +2645,166 @@ describe('Journal des erreurs (console éditeur)', () => {
 
     // Réservé à l'éditeur.
     await agent.api.get('/platform/errors').expect(401);
+  });
+});
+
+describe('Assistant de démarrage', () => {
+  it('métier, communes et agents : la structure est prête en une fois', async () => {
+    const t = await newTenant(app);
+    const lead = await t.createUser('team_lead');
+    await lead.api.get('/setup/status').expect(403);
+
+    expect(
+      (await t.admin.api.get('/setup/status').expect(200)).body,
+    ).toMatchObject({
+      suggested: true,
+      done: false,
+    });
+    const catalog = (await t.admin.api.get('/setup/catalog').expect(200))
+      .body as {
+      activities: { key: string; fields: { label: string }[] }[];
+      cities: { key: string; areas: { key: string; name: string }[] }[];
+    };
+    expect(catalog.activities.map((a) => a.key)).toEqual([
+      'sales',
+      'collection',
+      'survey',
+      'insurance',
+      'merchandising',
+      'other',
+    ]);
+    const abidjan = catalog.cities.find((c) => c.key === 'abidjan')!;
+    expect(abidjan.areas).toHaveLength(13);
+
+    const phone = uniquePhone();
+    const result = (
+      await t.admin.api
+        .post('/setup', {
+          activities: ['sales', 'collection'],
+          areaKeys: ['abidjan:plateau', 'abidjan:cocody'],
+          customAreas: [
+            {
+              name: 'Marché de Treichville',
+              lat: 5.2985,
+              lng: -4.0025,
+              radiusM: 500,
+            },
+          ],
+          agents: [
+            { firstName: 'Koffi', lastName: 'Brou', phone },
+            { firstName: 'Awa', lastName: 'Koné', phone: '12' },
+          ],
+        })
+        .expect(201)
+    ).body as {
+      zones: { created: string[]; skipped: { name: string; reason: string }[] };
+      missionTypes: string[];
+      missions: string[];
+      agents: {
+        created: { name: string }[];
+        skipped: { name: string; reason: string }[];
+      };
+      agentPassword: string;
+    };
+    // Le secteur du marché chevauche Treichville ? Non : Treichville n'a pas été choisie.
+    expect(result.zones.created).toEqual([
+      'Plateau',
+      'Cocody',
+      'Marché de Treichville',
+    ]);
+    // Deux métiers : deux formulaires, deux missions de la semaine.
+    expect(result.missionTypes).toEqual([
+      'Visite commerciale',
+      'Visite de recouvrement',
+    ]);
+    expect(result.missions).toEqual([
+      'Visites commerciales de la semaine',
+      'Recouvrements de la semaine',
+    ]);
+    expect(result.agents.created.map((a) => a.name)).toEqual(['Koffi Brou']);
+    expect(result.agents.skipped[0].name).toBe('Awa Koné');
+    expect(result.agentPassword).toMatch(/^Suivi-\d{4}[a-z]{2}$/);
+
+    // Le formulaire du métier, la mission sur les trois zones, objectif 30 × 2 agents prévus.
+    const types = (await t.admin.api.get('/mission-types').expect(200))
+      .body as {
+      name: string;
+      fields: { key: string; type: string }[];
+    }[];
+    expect(
+      types
+        .find((x) => x.name === 'Visite commerciale')!
+        .fields.map((f) => f.type),
+    ).toContain('photo');
+    const missions = (await t.admin.api.get('/missions').expect(200)).body as {
+      items: {
+        title: string;
+        targetValue: number;
+        zones: { name: string }[];
+      }[];
+    };
+    expect(missions.items).toHaveLength(2);
+    const sales = missions.items.find(
+      (m) => m.title === 'Visites commerciales de la semaine',
+    )!;
+    expect(sales.targetValue).toBe(60);
+    expect(sales.zones).toHaveLength(3);
+
+    // L'agent se connecte avec son numéro et le mot de passe de départ.
+    await new Api(app)
+      .post('/auth/login', { phone, password: result.agentPassword })
+      .expect(200);
+
+    // Fait : l'assistant ne s'ouvre plus de lui-même.
+    expect(
+      (await t.admin.api.get('/setup/status').expect(200)).body,
+    ).toMatchObject({
+      suggested: false,
+      done: true,
+    });
+
+    // Relancé : rien en double ; une commune qui chevauche le secteur est écartée.
+    const again = (
+      await t.admin.api
+        .post('/setup', {
+          activities: ['sales'],
+          areaKeys: ['abidjan:plateau', 'abidjan:treichville'],
+        })
+        .expect(201)
+    ).body as typeof result;
+    expect(again.zones.created).toEqual([]);
+    expect(again.zones.skipped.map((s) => s.name)).toEqual([
+      'Plateau',
+      'Treichville',
+    ]);
+    expect(again.zones.skipped[1].reason).toContain('chevauche');
+    expect(again.missionTypes).toEqual([]);
+    expect(again.missions).toEqual([]);
+
+    await t.admin.api
+      .post('/setup', {
+        activities: ['inconnue'],
+        areaKeys: ['abidjan:plateau'],
+      })
+      .expect(400);
+    await t.admin.api
+      .post('/setup', { activities: [], areaKeys: ['abidjan:plateau'] })
+      .expect(400);
+    await t.admin.api
+      .post('/setup', { activities: ['sales'], areaKeys: ['lune:mer'] })
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('UNKNOWN_AREA'));
+  });
+
+  it('« plus tard » : l’assistant ne s’ouvre plus', async () => {
+    const t = await newTenant(app);
+    await t.admin.api.post('/setup/skip').expect(201);
+    expect(
+      (await t.admin.api.get('/setup/status').expect(200)).body,
+    ).toMatchObject({
+      suggested: false,
+      done: false,
+    });
   });
 });
 
@@ -4038,7 +4556,7 @@ describe('Abonnement des structures', () => {
       'enterprise',
     ]);
     const me = (await t.admin.api.get('/auth/me').expect(200)).body;
-    expect(me.subscription.features).toHaveLength(10);
+    expect(me.subscription.features).toHaveLength(11);
     await t.admin.api.get('/stats/overview').expect(200);
 
     // Engagement annuel : remise, et pas de retour au mensuel avant son terme.
@@ -6391,7 +6909,7 @@ describe('Espace éditeur (super administrateur)', () => {
       planCode: 'base',
     });
     // Essai : toutes les fonctionnalités, quotas de la formule d'essai.
-    expect(sub.features).toHaveLength(10);
+    expect(sub.features).toHaveLength(11);
     expect(sub.usage.agents.limit).toBe(30);
     await sa
       .patch('/platform/settings', {

@@ -1,8 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import { Feature, FieldType, type MissionPay, Role } from '@suivi/shared';
+import { Feature, type MissionPay, Role } from '@suivi/shared';
 import type { AuthUser } from '../common/auth-user';
-import { badRequest, forbidden, notFound } from '../common/business.exception';
+import { forbidden, notFound } from '../common/business.exception';
 import { DbService } from '../common/db.service';
+import { assertFields } from '../common/form-fields';
 import {
   assertDeletable,
   countSql,
@@ -12,11 +13,7 @@ import {
 import { Mission, MissionType } from '../entities';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { normalizePay } from './mission-pay';
-import {
-  CreateMissionTypeDto,
-  MissionFieldDto,
-  UpdateMissionTypeDto,
-} from './missions.dto';
+import { CreateMissionTypeDto, UpdateMissionTypeDto } from './missions.dto';
 
 @Injectable()
 export class MissionTypesService {
@@ -108,20 +105,5 @@ export class MissionTypesService {
     assertDeletable(await this.impact(id), force);
     await this.db.manager.delete(Mission, { typeId: id });
     await this.db.manager.delete(MissionType, { id });
-  }
-}
-
-function assertFields(fields: MissionFieldDto[]) {
-  const keys = new Set<string>();
-  for (const field of fields) {
-    if (keys.has(field.key))
-      throw badRequest('DUPLICATE_FIELD', `Champ en double : ${field.key}`);
-    keys.add(field.key);
-    if (field.type === FieldType.Select && !field.options?.length) {
-      throw badRequest(
-        'MISSING_OPTIONS',
-        `Le champ ${field.key} doit proposer des options`,
-      );
-    }
   }
 }

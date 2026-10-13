@@ -25,8 +25,11 @@ import { MAX_PHOTO_BYTES, PhotosService } from './photos.service';
 export class PhotosController {
   constructor(private readonly photos: PhotosService) {}
 
-  /** Photo prise par l'agent pour un formulaire : JPEG, PNG ou WebP, 5 Mo maximum. */
-  @Roles(Role.Agent)
+  /**
+   * Photo prise sur le terrain (formulaire, fiche de point de vente) : JPEG, PNG ou WebP,
+   * 5 Mo maximum. Le chef d'équipe en prend aussi pour les points de vente.
+   */
+  @Roles(Role.Agent, Role.TeamLead)
   @Post()
   @ApiConsumes('multipart/form-data')
   @ApiBody({

@@ -6,3 +6,4 @@ export * from './landing';
 export * from './support';
 export * from './onboarding';
 export * from './onboarding-slides';
+export * from './outlets';
