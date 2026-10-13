@@ -283,7 +283,84 @@ export class OutletsService {
        WHERE h.outlet_id = $1 ORDER BY h.created_at DESC, h.id LIMIT 100`,
       [id],
     );
-    return { ...outlet, history };
+    // Visites des missions : les plus récentes.
+    const visits = await this.db.manager.query<
+      {
+        id: string;
+        missionId: string;
+        missionTitle: string;
+        agent: string;
+        submittedAt: Date;
+        distance: number | null;
+        status: string;
+      }[]
+    >(
+      `SELECT s.id, m.id AS "missionId", m.title AS "missionTitle",
+              trim(u.first_name || ' ' || u.last_name) AS agent,
+              s.submitted_at AS "submittedAt", s.distance_m AS distance, s.status
+       FROM mission_submissions s
+       JOIN missions m ON m.id = s.mission_id
+       JOIN users u ON u.id = s.agent_id
+       WHERE s.outlet_id = $1
+       ORDER BY s.submitted_at DESC LIMIT 30`,
+      [id],
+    );
+    return { ...outlet, history, visits };
+  }
+
+  /** Point de vente visible par l'utilisateur (visite d'une mission). */
+  findForVisit(user: AuthUser, id: string): Promise<OutletView> {
+    return this.findVisible(user, id);
+  }
+
+  /** Position enregistrée lors d'une visite d'un point de vente qui n'en avait pas. */
+  async locateFromVisit(
+    outletId: string,
+    lat: number,
+    lng: number,
+    accuracy: number | null,
+    userId: string,
+  ) {
+    const [row] = await this.db.manager.query<{ status: OutletStatus }[]>(
+      `WITH u AS (
+         UPDATE outlets SET location = ST_SetSRID(ST_MakePoint($2, $3), 4326), accuracy = $4,
+                updated_at = now()
+         WHERE id = $1 AND location IS NULL RETURNING status
+       )
+       SELECT status FROM u`,
+      [outletId, lng, lat, accuracy],
+    );
+    if (row)
+      await this.history(
+        outletId,
+        row.status,
+        row.status,
+        'Localisé lors d’une visite',
+        userId,
+      );
+  }
+
+  /** Statut constaté pendant une visite (avec un commentaire facultatif). */
+  async statusFromVisit(
+    user: AuthUser,
+    outlet: OutletView,
+    status: OutletStatus | undefined,
+    comment: string | undefined,
+  ) {
+    const next = status ?? outlet.status;
+    if (next === outlet.status && !comment) return;
+    if (next !== outlet.status)
+      await this.db.manager.query(
+        `UPDATE outlets SET status = $2, status_changed_at = now(), updated_at = now() WHERE id = $1`,
+        [outlet.id, next],
+      );
+    await this.history(
+      outlet.id,
+      outlet.status,
+      next,
+      comment || null,
+      user.id,
+    );
   }
 
   private async findVisible(user: AuthUser, id: string): Promise<OutletView> {
@@ -466,6 +543,17 @@ export class OutletsService {
     );
     await m.query(
       `UPDATE submission_photos SET outlet_id = $1 WHERE outlet_id = $2`,
+      [intoId, id],
+    );
+    // Visites et listes de missions : elles suivent la fiche conservée.
+    await m.query(
+      `UPDATE mission_submissions SET outlet_id = $1 WHERE outlet_id = $2`,
+      [intoId, id],
+    );
+    await m.query(
+      `INSERT INTO mission_outlets (tenant_id, mission_id, outlet_id)
+       SELECT tenant_id, mission_id, $1 FROM mission_outlets WHERE outlet_id = $2
+       ON CONFLICT DO NOTHING`,
       [intoId, id],
     );
     await m.query(`DELETE FROM outlets WHERE id = $1`, [id]);

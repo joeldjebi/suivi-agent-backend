@@ -812,6 +812,228 @@ describe('Points de vente', () => {
   });
 });
 
+describe('Missions de visites de points de vente', () => {
+  /** Point à ~`m` mètres au nord de `p`. */
+  const north = (p: { lat: number; lng: number }, m: number) => ({
+    lat: p.lat + m / 111_320,
+    lng: p.lng,
+  });
+
+  const setup = async () => {
+    const t = await newTenant(app);
+    const plateau = await t.createZone('Plateau', PLATEAU);
+    const cocody = await t.createZone('Cocody', COCODY);
+    const agent = await t.createUser('agent');
+    const outlet = async (name: string, at: { lat: number; lng: number }) =>
+      (
+        await t.admin.api
+          .post('/outlets', { name, ...at, force: true })
+          .expect(201)
+      ).body as Body;
+    const type = (
+      await t.admin.api
+        .post('/mission-types', {
+          name: 'Contrôle',
+          fields: [
+            { key: 'stock', label: 'Stock', type: 'number', required: false },
+          ],
+        })
+        .expect(201)
+    ).body as { id: string };
+    await agent.api.post('/zone-requests', { zoneId: plateau.id }).expect(201);
+    await agent.api.post('/days/start').expect(200);
+    const visit = (
+      missionId: string,
+      body: object,
+      at: { lat: number; lng: number } = IN_PLATEAU,
+    ) =>
+      agent.api.post(`/missions/${missionId}/submissions`, {
+        clientId: randomUUID(),
+        data: { stock: 12 },
+        ...at,
+        submittedAt: new Date().toISOString(),
+        ...body,
+      });
+    return { t, plateau, cocody, agent, outlet, type, visit };
+  };
+
+  it('liste précise : sur place à 50 m, chaque point de vente compte une fois', async () => {
+    const { t, plateau, outlet, type, visit } = await setup();
+    const a = await outlet('Boutique Awa', IN_PLATEAU);
+    const b = await outlet('Kiosque Bleu', north(IN_PLATEAU, 300));
+    const c = await outlet('Cave Koffi', north(IN_PLATEAU, 600));
+
+    await t.admin.api
+      .post('/missions', {
+        typeId: type.id,
+        title: 'Tournée',
+        zoneIds: [plateau.id],
+        progressMethod: 'outlets',
+        outletIds: [a.id, b.id],
+      })
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('VISIT_MODE_REQUIRED'));
+    const mission = (
+      await t.admin.api
+        .post('/missions', {
+          typeId: type.id,
+          title: 'Tournée du Plateau',
+          zoneIds: [plateau.id],
+          progressMethod: 'outlets',
+          visitMode: 'list',
+          outletIds: [a.id, b.id],
+        })
+        .expect(201)
+    ).body;
+    expect(mission).toMatchObject({
+      visitMode: 'list',
+      progress: { current: 0, target: 2 },
+    });
+
+    await visit(mission.id, {})
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('OUTLET_REQUIRED'));
+    await visit(mission.id, { outletId: c.id }, north(IN_PLATEAU, 600))
+      .expect(409)
+      .expect((r) => expect(r.body.code).toBe('OUTLET_NOT_IN_MISSION'));
+    // Trop loin du point de vente : refusé, avec la distance.
+    const far = await visit(
+      mission.id,
+      { outletId: a.id },
+      north(IN_PLATEAU, 120),
+    ).expect(409);
+    expect(far.body).toMatchObject({ code: 'VISIT_TOO_FAR', radius: 50 });
+    expect(far.body.distance).toBeGreaterThan(110);
+    // Précision du GPS tolérée (jusqu'à 25 m).
+    await visit(
+      mission.id,
+      {
+        outletId: a.id,
+        accuracy: 20,
+        outletStatus: 'active',
+        outletComment: 'Commande passée',
+      },
+      north(IN_PLATEAU, 65),
+    ).expect(201);
+    await visit(mission.id, { outletId: a.id }, north(IN_PLATEAU, 5)).expect(
+      201,
+    );
+    const after = (await t.admin.api.get(`/missions/${mission.id}`).expect(200))
+      .body;
+    expect(after.progress).toMatchObject({ current: 1, target: 2 });
+    expect(after.status).toBe('in_progress');
+
+    const outlets = (
+      await t.admin.api
+        .get(
+          `/missions/${mission.id}/outlets?lat=${IN_PLATEAU.lat}&lng=${IN_PLATEAU.lng}`,
+        )
+        .expect(200)
+    ).body as Body[];
+    expect(outlets.map((o) => [o.name, o.visited, o.visits])).toEqual([
+      ['Kiosque Bleu', false, 0],
+      ['Boutique Awa', true, 2],
+    ]);
+    expect(outlets[0].distance).toBeGreaterThan(290);
+
+    const fiche = (await t.admin.api.get(`/outlets/${a.id}`).expect(200)).body;
+    expect(fiche.status).toBe('active');
+    expect(fiche.history[0]).toMatchObject({
+      fromStatus: 'new',
+      toStatus: 'active',
+      comment: 'Commande passée',
+    });
+    expect(fiche.visits).toHaveLength(2);
+    expect(fiche.visits[1]).toMatchObject({
+      missionTitle: 'Tournée du Plateau',
+      distance: 65,
+    });
+
+    // Contrôle de distance désactivé par la structure.
+    await t.settings({ visitRadiusMeters: 0 });
+    await visit(mission.id, { outletId: b.id }, north(IN_PLATEAU, 5)).expect(
+      201,
+    );
+    expect(
+      (await t.admin.api.get(`/missions/${mission.id}`).expect(200)).body
+        .status,
+    ).toBe('achieved');
+
+    // Liste modifiée : l'objectif suit.
+    const updated = (
+      await t.admin.api
+        .patch(`/missions/${mission.id}`, { outletIds: [a.id, b.id, c.id] })
+        .expect(200)
+    ).body;
+    expect(updated.progress).toMatchObject({ current: 2, target: 3 });
+  });
+
+  it('objectif libre dans les zones ; un point de vente à localiser l’est par la visite', async () => {
+    const { t, plateau, outlet, type, visit } = await setup();
+    const a = await outlet('Boutique Awa', IN_PLATEAU);
+    const outside = await outlet('Maquis Est', { lat: 5.355, lng: -3.98 });
+    const [{ id: unlocated }] = await owner.query<{ id: string }[]>(
+      `INSERT INTO outlets (tenant_id, name) VALUES ($1, 'Importé') RETURNING id`,
+      [t.tenantId],
+    );
+    const mission = (
+      await t.admin.api
+        .post('/missions', {
+          typeId: type.id,
+          title: 'Prospection libre',
+          zoneIds: [plateau.id],
+          progressMethod: 'outlets',
+          visitMode: 'free',
+          targetValue: 2,
+        })
+        .expect(201)
+    ).body;
+    await visit(
+      mission.id,
+      { outletId: outside.id },
+      { lat: 5.355, lng: -3.98 },
+    )
+      .expect(409)
+      .expect((r) => expect(r.body.code).toBe('OUTLET_OUTSIDE_MISSION'));
+    await visit(mission.id, { outletId: a.id }).expect(201);
+    await visit(
+      mission.id,
+      { outletId: unlocated },
+      north(IN_PLATEAU, 80),
+    ).expect(201);
+    const fiche = (await t.admin.api.get(`/outlets/${unlocated}`).expect(200))
+      .body;
+    expect(fiche.lat).toBeCloseTo(north(IN_PLATEAU, 80).lat, 5);
+    expect(fiche.zone).toMatchObject({ name: 'Plateau' });
+    expect(fiche.history[0].comment).toBe('Localisé lors d’une visite');
+    expect(
+      (await t.admin.api.get(`/missions/${mission.id}`).expect(200)).body,
+    ).toMatchObject({ status: 'achieved', progress: { current: 2 } });
+
+    // Sans position, la visite est refusée (contrôle de distance actif).
+    await visit(mission.id, { outletId: a.id }, {} as never)
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('POSITION_REQUIRED'));
+
+    // Formule sans points de vente : pas de mission de visites.
+    await owner.query(
+      `UPDATE subscriptions SET plan_code = 'advanced', status = 'active', trial_ends_at = NULL WHERE tenant_id = $1`,
+      [t.tenantId],
+    );
+    app.get(SubscriptionsService).invalidate(t.tenantId);
+    await t.admin.api
+      .post('/missions', {
+        typeId: type.id,
+        title: 'Autre',
+        zoneIds: [plateau.id],
+        progressMethod: 'outlets',
+        visitMode: 'free',
+        targetValue: 3,
+      })
+      .expect(402);
+  });
+});
+
 describe('Recherche de lieux pour créer une zone', () => {
   it('trouve une commune sans tenir compte des accents', async () => {
     const t = await newTenant(app);

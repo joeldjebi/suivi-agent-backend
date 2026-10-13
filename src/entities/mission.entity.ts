@@ -1,4 +1,9 @@
-import type { MissionPay, MissionStatus, ProgressMethod } from '@suivi/shared';
+import type {
+  MissionPay,
+  MissionStatus,
+  ProgressMethod,
+  VisitMode,
+} from '@suivi/shared';
 import {
   Column,
   CreateDateColumn,
@@ -44,6 +49,10 @@ export class Mission {
   /** Champ numérique additionné quand la méthode est « field_sum » (RG-36). */
   @Column({ name: 'sum_field_key', type: 'text', nullable: true })
   sumFieldKey: string | null;
+
+  /** Mission de visites : liste précise de points de vente, ou objectif libre. */
+  @Column({ name: 'visit_mode', type: 'text', nullable: true })
+  visitMode: VisitMode | null;
 
   @Column({ name: 'due_date', type: 'timestamptz', nullable: true })
   dueDate: Date | null;

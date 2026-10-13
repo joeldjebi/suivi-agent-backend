@@ -50,6 +50,8 @@ export const ProgressMethod = {
   Count: 'count',
   FieldSum: 'field_sum',
   Manual: 'manual',
+  /** Points de vente différents visités (missions de visites) */
+  Outlets: 'outlets',
 } as const;
 export type ProgressMethod = (typeof ProgressMethod)[keyof typeof ProgressMethod];
 

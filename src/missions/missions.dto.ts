@@ -2,8 +2,10 @@ import { PartialType, PickType } from '@nestjs/swagger';
 import {
   FieldType,
   MissionStatus,
+  OutletStatus,
   ProgressMethod,
   SubmissionStatus,
+  VisitMode,
 } from '@suivi/shared';
 import { Transform, Type } from 'class-transformer';
 import {
@@ -168,6 +170,19 @@ export class CreateMissionDto {
   @IsString()
   sumFieldKey?: string;
 
+  /** Méthode « outlets » : liste précise de points de vente, ou objectif libre */
+  @IsOptional()
+  @IsIn(Object.values(VisitMode))
+  visitMode?: VisitMode;
+
+  /** Liste précise : les points de vente à visiter (l'objectif est leur nombre) */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(2000)
+  @ArrayUnique()
+  @IsUUID('all', { each: true })
+  outletIds?: string[];
+
   /** Échéance (ISO 8601) */
   @IsOptional()
   @IsDateString()
@@ -188,6 +203,15 @@ export class UpdateMissionDto extends PartialType(
     'dueDate',
   ] as const),
 ) {
+  /** Liste précise : nouvelle liste des points de vente à visiter */
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1, { message: 'Choisissez au moins un point de vente' })
+  @ArrayMaxSize(2000)
+  @ArrayUnique()
+  @IsUUID('all', { each: true })
+  outletIds?: string[];
+
   /** Nouvelles zones de la mission (remplacent les précédentes) */
   @IsOptional()
   @IsArray()
@@ -288,9 +312,43 @@ export class CreateSubmissionDto {
   @IsLongitude()
   lng?: number;
 
+  /** Précision du GPS au moment de la saisie, en mètres */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  accuracy?: number;
+
   /** Heure de saisie sur le téléphone (ISO 8601) */
   @IsDateString()
   submittedAt: string;
+
+  /** Mission de visites : le point de vente visité */
+  @IsOptional()
+  @IsUUID()
+  outletId?: string;
+
+  /** Nouveau statut du point de vente constaté pendant la visite */
+  @IsOptional()
+  @IsIn(Object.values(OutletStatus))
+  outletStatus?: OutletStatus;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  outletComment?: string;
+}
+
+export class MissionOutletsQuery {
+  /** Position de l'agent : les points de vente non visités du plus proche au plus loin */
+  @IsOptional()
+  @Type(() => Number)
+  @IsLatitude()
+  lat?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsLongitude()
+  lng?: number;
 }
 
 export class RejectSubmissionDto {

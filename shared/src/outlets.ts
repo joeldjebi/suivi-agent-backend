@@ -19,6 +19,19 @@ export const OUTLET_STATUS_LABELS: Record<OutletStatus, string> = {
   closed: 'Fermé',
 };
 
+/**
+ * Mission de visites : une liste précise de points de vente à visiter, ou un objectif de
+ * points de vente différents dans les zones de la mission.
+ */
+export const VisitMode = {
+  List: 'list',
+  Free: 'free',
+} as const;
+export type VisitMode = (typeof VisitMode)[keyof typeof VisitMode];
+
+/** Distance maximale par défaut entre l'agent et le point de vente visité, en mètres. */
+export const DEFAULT_VISIT_RADIUS_METERS = 50;
+
 /** Types de commerce proposés ; la structure peut en saisir d'autres. */
 export const OUTLET_CATEGORIES = [
   'Boutique',

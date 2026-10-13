@@ -199,6 +199,13 @@ export class UpdateSettingsDto {
   @IsBoolean()
   submissionRequiresDay?: boolean;
 
+  /** Visite d'un point de vente : distance maximale de l'agent, en mètres (0 = pas de contrôle) */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(1000)
+  visitRadiusMeters?: number;
+
   /** Heure du bilan de fin de journée (HH:mm) ; null : pas d'envoi */
   @IsOptional()
   @ValidateIf((_, v) => v !== null)

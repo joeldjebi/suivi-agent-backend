@@ -143,6 +143,12 @@ export class PayrollCalculator {
                 WHEN m.progress_method = 'count' THEN
                   (SELECT count(*) FROM mission_submissions s WHERE s.mission_id = m.id AND s.status = 'accepted')
                   * 100.0 / nullif(m.target_value, 0)
+                WHEN m.progress_method = 'outlets' THEN
+                  (SELECT count(DISTINCT s.outlet_id) FROM mission_submissions s
+                   WHERE s.mission_id = m.id AND s.status = 'accepted' AND s.outlet_id IS NOT NULL
+                     AND (m.visit_mode <> 'list' OR EXISTS (SELECT 1 FROM mission_outlets mo
+                          WHERE mo.mission_id = m.id AND mo.outlet_id = s.outlet_id)))
+                  * 100.0 / nullif(m.target_value, 0)
                 ELSE
                   (SELECT coalesce(sum(CASE WHEN (s.data ->> m.sum_field_key) ~ '^-?[0-9]+(\\.[0-9]+)?$'
                                             THEN (s.data ->> m.sum_field_key)::numeric END), 0)

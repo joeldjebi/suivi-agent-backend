@@ -982,6 +982,7 @@ export async function generateActivity(
      FROM (
        SELECT m2.id, coalesce(
          CASE WHEN m2.progress_method = 'count' THEN count(s.id)::numeric
+              WHEN m2.progress_method = 'outlets' THEN count(DISTINCT s.outlet_id)::numeric
               ELSE sum((s.data ->> m2.sum_field_key)::numeric) END, 0) AS value
        FROM missions m2 LEFT JOIN mission_submissions s ON s.mission_id = m2.id AND s.status = 'accepted'
        WHERE m2.tenant_id = $1 AND m2.progress_method <> 'manual'

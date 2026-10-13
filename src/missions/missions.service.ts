@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable } from '@nestjs/common';
 import {
   Feature,
   FieldType,
@@ -8,10 +8,12 @@ import {
   ProgressMethod,
   Role,
   SubmissionStatus,
+  VisitMode,
 } from '@suivi/shared';
 import { AccessService } from '../common/access.service';
 import type { AuthUser } from '../common/auth-user';
 import {
+  BusinessException,
   badRequest,
   conflict,
   forbidden,
@@ -37,6 +39,11 @@ import {
   WorkDay,
 } from '../entities';
 import { PayrollCalculator, type Payee } from '../payroll/payroll.calculator';
+import {
+  distanceM,
+  OutletsService,
+  type OutletView,
+} from '../outlets/outlets.service';
 import { PhotosService } from '../photos/photos.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { normalizePay } from './mission-pay';
@@ -45,6 +52,7 @@ import {
   CreateMissionDto,
   CreateSubmissionDto,
   ListMissionsQuery,
+  MissionOutletsQuery,
   ListSubmissionsQuery,
   UpdateMissionDto,
 } from './missions.dto';
@@ -90,6 +98,7 @@ export class MissionsService {
     private readonly notifications: NotificationsService,
     private readonly subscriptions: SubscriptionsService,
     private readonly photos: PhotosService,
+    private readonly outlets: OutletsService,
   ) {}
 
   async list(user: AuthUser, query: ListMissionsQuery) {
@@ -402,6 +411,28 @@ export class MissionsService {
     });
     if (dto.dueDate) await this.assertNotPast(new Date(dto.dueDate));
     if (dto.pay) await this.assertCanSetPay(user);
+    const visits = dto.progressMethod === ProgressMethod.Outlets;
+    if (visits) {
+      await this.subscriptions.assertFeature(
+        this.db.tenantId,
+        Feature.PointsOfSale,
+      );
+      if (!dto.visitMode)
+        throw badRequest(
+          'VISIT_MODE_REQUIRED',
+          'Choisissez une liste de points de vente ou un objectif libre',
+        );
+      if (dto.visitMode === VisitMode.List) {
+        if (!dto.outletIds?.length)
+          throw badRequest(
+            'OUTLETS_REQUIRED',
+            'Choisissez au moins un point de vente à visiter',
+          );
+        await this.assertOutlets(user, dto.outletIds);
+        // Liste précise : l'objectif est de tous les visiter.
+        dto.targetValue = dto.outletIds.length;
+      }
+    }
     if (dto.progressMethod !== ProgressMethod.Manual && !dto.targetValue) {
       throw badRequest(
         'TARGET_REQUIRED',
@@ -423,12 +454,15 @@ export class MissionsService {
         dto.progressMethod === ProgressMethod.FieldSum
           ? dto.sumFieldKey!
           : null,
+      visitMode: visits ? dto.visitMode! : null,
       dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
       status: MissionStatus.Todo,
       createdById: user.id,
       pay: dto.pay ? normalizePay(dto.pay) : null,
     });
     await this.setZones(saved.id, dto.zoneIds);
+    if (visits && dto.visitMode === VisitMode.List)
+      await this.setOutlets(saved.id, dto.outletIds!);
     await this.notifications.notify(await this.assigneeIds(saved), {
       type: 'mission.assigned',
       title: 'Nouvelle mission',
@@ -440,7 +474,20 @@ export class MissionsService {
 
   async update(user: AuthUser, id: string, dto: UpdateMissionDto) {
     const mission = await this.findManageable(user, id);
-    const { zoneIds, ...fields } = dto;
+    const { zoneIds, outletIds, ...fields } = dto;
+    if (outletIds) {
+      if (mission.visitMode !== VisitMode.List)
+        throw badRequest(
+          'NOT_A_LIST',
+          'Cette mission n’a pas de liste de points de vente',
+        );
+      await this.assertOutlets(user, outletIds);
+      await this.setOutlets(id, outletIds);
+      fields.targetValue = outletIds.length;
+    } else if (mission.visitMode === VisitMode.List) {
+      // L'objectif d'une liste est son nombre de points de vente.
+      delete fields.targetValue;
+    }
     if (zoneIds) {
       await this.assertZones(user, zoneIds, {
         agentId: mission.assigneeAgentId ?? undefined,
@@ -577,9 +624,16 @@ export class MissionsService {
       outOfZone = row ? !row.inside : false;
     }
 
+    const visit =
+      mission.progressMethod === ProgressMethod.Outlets
+        ? await this.checkVisit(user, mission, dto, settings.visitRadiusMeters)
+        : null;
+
     const saved = await m.save(MissionSubmission, {
       tenantId: this.db.tenantId,
       missionId,
+      outletId: visit?.outlet.id ?? null,
+      distanceM: visit?.distance ?? null,
       agentId: user.id,
       dayId: day?.id ?? null,
       zoneId: day?.zoneId ?? null,
@@ -592,6 +646,22 @@ export class MissionsService {
       status: SubmissionStatus.Accepted,
     });
     await this.photos.attach(saved.id, photoIds);
+    if (visit) {
+      if (visit.outlet.lat == null && dto.lat != null && dto.lng != null)
+        await this.outlets.locateFromVisit(
+          visit.outlet.id,
+          dto.lat,
+          dto.lng,
+          dto.accuracy ?? null,
+          user.id,
+        );
+      await this.outlets.statusFromVisit(
+        user,
+        visit.outlet,
+        dto.outletStatus,
+        dto.outletComment,
+      );
+    }
     await this.refreshStatus(missionId);
     return saved;
   }
@@ -624,15 +694,33 @@ export class MissionsService {
     const meta = await this.photos.meta(
       items.flatMap((s) => photoIdsOf(fields, s.data)),
     );
+    // Missions de visites : le nom du point de vente visité.
+    const outletIds = [
+      ...new Set(items.map((s) => s.outletId).filter((id) => id !== null)),
+    ];
+    const outlets = new Map(
+      outletIds.length
+        ? (
+            await this.db.manager.query<{ id: string; name: string }[]>(
+              `SELECT id, name FROM outlets WHERE id = ANY($1::uuid[])`,
+              [outletIds],
+            )
+          ).map((o) => [o.id, o.name] as const)
+        : [],
+    );
     return items.map((s) => {
       const ids = photoIdsOf(fields, s.data);
-      return ids.length
-        ? Object.assign(s, {
-            photos: Object.fromEntries(
-              ids.filter((id) => meta[id]).map((id) => [id, meta[id]]),
-            ),
-          })
-        : s;
+      const outletName = s.outletId ? (outlets.get(s.outletId) ?? null) : null;
+      return Object.assign(s, {
+        ...(s.outletId ? { outletName } : {}),
+        ...(ids.length
+          ? {
+              photos: Object.fromEntries(
+                ids.filter((id) => meta[id]).map((id) => [id, meta[id]]),
+              ),
+            }
+          : {}),
+      });
     });
   }
 
@@ -678,6 +766,16 @@ export class MissionsService {
     let current: number;
     if (mission.progressMethod === ProgressMethod.Manual) {
       current = mission.status === MissionStatus.Achieved ? 1 : 0;
+    } else if (mission.progressMethod === ProgressMethod.Outlets) {
+      // Points de vente différents visités (de la liste, pour une liste précise).
+      const [row] = await this.db.manager.query<{ value: string }[]>(
+        `SELECT count(DISTINCT s.outlet_id) AS value FROM mission_submissions s
+         WHERE s.mission_id = $1 AND s.status = 'accepted' AND s.outlet_id IS NOT NULL
+           AND (NOT $2 OR EXISTS (SELECT 1 FROM mission_outlets mo
+                                  WHERE mo.mission_id = s.mission_id AND mo.outlet_id = s.outlet_id))`,
+        [mission.id, mission.visitMode === VisitMode.List],
+      );
+      current = Number(row.value);
     } else {
       const [row] = await this.db.manager.query<{ value: string }[]>(
         mission.progressMethod === ProgressMethod.Count
@@ -707,16 +805,18 @@ export class MissionsService {
     const valueExpr =
       mission.progressMethod === ProgressMethod.Count
         ? 'count(s.id)'
-        : `coalesce(sum((s.data ->> $2)::numeric), 0)`;
+        : mission.progressMethod === ProgressMethod.Outlets
+          ? 'count(DISTINCT s.outlet_id)'
+          : `coalesce(sum((s.data ->> $2)::numeric), 0)`;
     return this.db.manager.query<Contribution[]>(
       `SELECT u.id AS "agentId", u.first_name AS "firstName", u.last_name AS "lastName",
               ${valueExpr}::float8 AS value
        FROM mission_submissions s JOIN users u ON u.id = s.agent_id
        WHERE s.mission_id = $1 AND s.status = 'accepted'
        GROUP BY u.id ORDER BY value DESC`,
-      mission.progressMethod === ProgressMethod.Count
-        ? [mission.id]
-        : [mission.id, mission.sumFieldKey],
+      mission.progressMethod === ProgressMethod.FieldSum
+        ? [mission.id, mission.sumFieldKey]
+        : [mission.id],
     );
   }
 
@@ -817,6 +917,143 @@ export class MissionsService {
         { id: r.id, name: r.name },
       ]);
     return out;
+  }
+
+  /**
+   * Visite d'un point de vente : celui de la liste (ou des zones de la mission, en mode
+   * libre), et l'agent sur place (distance maximale réglée par la structure, la précision du
+   * GPS tolérée jusqu'à 25 m). Un point de vente sans position est localisé par la visite.
+   */
+  private async checkVisit(
+    user: AuthUser,
+    mission: Mission,
+    dto: CreateSubmissionDto,
+    radius: number,
+  ): Promise<{ outlet: OutletView; distance: number | null }> {
+    if (!dto.outletId)
+      throw badRequest(
+        'OUTLET_REQUIRED',
+        'Choisissez le point de vente visité',
+      );
+    const outlet = await this.outlets.findForVisit(user, dto.outletId);
+    if (mission.visitMode === VisitMode.List) {
+      const [listed] = await this.db.manager.query<unknown[]>(
+        `SELECT 1 FROM mission_outlets WHERE mission_id = $1 AND outlet_id = $2`,
+        [mission.id, outlet.id],
+      );
+      if (!listed)
+        throw conflict(
+          'OUTLET_NOT_IN_MISSION',
+          `« ${outlet.name} » ne fait pas partie des points de vente de cette mission`,
+        );
+    } else if (outlet.lat != null) {
+      const [inside] = await this.db.manager.query<unknown[]>(
+        `SELECT 1 FROM mission_zones mz JOIN zones z ON z.id = mz.zone_id AND z.is_active
+         JOIN outlets o ON o.id = $2
+         WHERE mz.mission_id = $1 AND ST_Covers(z.area, o.location) LIMIT 1`,
+        [mission.id, outlet.id],
+      );
+      if (!inside)
+        throw conflict(
+          'OUTLET_OUTSIDE_MISSION',
+          `« ${outlet.name} » est en dehors des zones de cette mission`,
+        );
+    }
+    const hasPosition = dto.lat != null && dto.lng != null;
+    if (radius > 0 && !hasPosition)
+      throw badRequest(
+        'POSITION_REQUIRED',
+        'Position introuvable : activez la localisation pour enregistrer la visite',
+      );
+    if (!hasPosition || outlet.lat == null) return { outlet, distance: null };
+    const distance = Math.round(
+      distanceM(dto.lat!, dto.lng!, outlet.lat, outlet.lng!),
+    );
+    const tolerance = Math.min(dto.accuracy ?? 0, 25);
+    if (radius > 0 && distance > radius + tolerance)
+      throw new BusinessException(
+        HttpStatus.CONFLICT,
+        'VISIT_TOO_FAR',
+        `Vous êtes à ${distance} m de « ${outlet.name} » : rapprochez-vous (${radius} m au plus)`,
+        { distance, radius },
+      );
+    return { outlet, distance };
+  }
+
+  /** Points de vente visibles par l'utilisateur. */
+  private async assertOutlets(user: AuthUser, ids: string[]) {
+    for (const id of ids) await this.outlets.findForVisit(user, id);
+  }
+
+  private async setOutlets(missionId: string, outletIds: string[]) {
+    await this.db.manager.query(
+      `DELETE FROM mission_outlets WHERE mission_id = $1`,
+      [missionId],
+    );
+    await this.db.manager.query(
+      `INSERT INTO mission_outlets (mission_id, outlet_id, tenant_id)
+       SELECT $1, unnest($2::uuid[]), $3`,
+      [missionId, outletIds, this.db.tenantId],
+    );
+  }
+
+  /**
+   * Points de vente d'une mission de visites, avec leurs visites : la liste précise, ou en
+   * mode libre ceux des zones de la mission. Ceux à visiter d'abord (les plus proches si la
+   * position est donnée), puis ceux déjà visités.
+   */
+  async missionOutlets(user: AuthUser, id: string, q: MissionOutletsQuery) {
+    const mission = await this.findVisible(user, id);
+    if (mission.progressMethod !== ProgressMethod.Outlets)
+      throw badRequest(
+        'NOT_A_VISIT_MISSION',
+        'Cette mission n’est pas une mission de visites',
+      );
+    const near = q.lat != null && q.lng != null;
+    const rows = await this.db.manager.query<
+      {
+        id: string;
+        name: string;
+        category: string | null;
+        status: string;
+        lat: number | null;
+        lng: number | null;
+        visits: number;
+        lastVisitAt: Date | null;
+        lastVisitBy: string | null;
+        distance: number | null;
+      }[]
+    >(
+      `WITH targets AS (
+         SELECT o.* FROM outlets o
+         WHERE ($2 AND EXISTS (SELECT 1 FROM mission_outlets mo WHERE mo.mission_id = $1 AND mo.outlet_id = o.id))
+            OR (NOT $2 AND o.location IS NOT NULL AND EXISTS (
+                  SELECT 1 FROM mission_zones mz JOIN zones z ON z.id = mz.zone_id AND z.is_active
+                  WHERE mz.mission_id = $1 AND ST_Covers(z.area, o.location)))
+       )
+       SELECT t.id, t.name, t.category, t.status, ST_Y(t.location) AS lat, ST_X(t.location) AS lng,
+              count(s.id)::int AS visits, max(s.submitted_at) AS "lastVisitAt",
+              (SELECT trim(u.first_name || ' ' || u.last_name) FROM mission_submissions s2
+                 JOIN users u ON u.id = s2.agent_id
+                 WHERE s2.mission_id = $1 AND s2.outlet_id = t.id AND s2.status = 'accepted'
+                 ORDER BY s2.submitted_at DESC LIMIT 1) AS "lastVisitBy",
+              CASE WHEN $3::float8 IS NULL OR t.location IS NULL THEN NULL
+                   ELSE round(ST_Distance(t.location::geography,
+                          ST_SetSRID(ST_MakePoint($4::float8, $3::float8), 4326)::geography))::int END AS distance
+       FROM targets t
+       LEFT JOIN mission_submissions s
+         ON s.mission_id = $1 AND s.outlet_id = t.id AND s.status = 'accepted'
+       GROUP BY t.id, t.name, t.category, t.status, t.location
+       ORDER BY (count(s.id) > 0), ${near ? 'distance NULLS LAST,' : ''} t.name
+       LIMIT 1000`,
+      [
+        mission.id,
+        mission.visitMode === VisitMode.List,
+        q.lat ?? null,
+        q.lng ?? null,
+      ],
+    );
+    return rows.map((r) => ({ ...r, visited: r.visits > 0 }));
   }
 
   private async setZones(missionId: string, zoneIds: string[]) {

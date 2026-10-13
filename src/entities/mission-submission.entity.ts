@@ -42,6 +42,14 @@ export class MissionSubmission {
   @Column({ name: 'submitted_at', type: 'timestamptz' })
   submittedAt: Date;
 
+  /** Point de vente visité (missions de visites) */
+  @Column({ name: 'outlet_id', type: 'uuid', nullable: true })
+  outletId: string | null;
+
+  /** Distance mesurée entre l'agent et le point de vente, en mètres */
+  @Column({ name: 'distance_m', type: 'int', nullable: true })
+  distanceM: number | null;
+
   @Column({ name: 'received_at', type: 'timestamptz', default: () => 'now()' })
   receivedAt: Date;
 

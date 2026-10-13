@@ -109,6 +109,10 @@ export class TenantSettings {
   @Column({ name: 'submission_requires_day' })
   submissionRequiresDay: boolean;
 
+  /** Visite d'un point de vente : distance maximale de l'agent, en mètres (0 = pas de contrôle) */
+  @Column({ name: 'visit_radius_meters', default: 50 })
+  visitRadiusMeters: number;
+
   /** Durée de travail attendue par jour pour les agents, en minutes (8 h par défaut) */
   @Column({ name: 'workday_minutes' })
   workdayMinutes: number;

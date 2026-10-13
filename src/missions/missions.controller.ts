@@ -24,6 +24,7 @@ import {
   CreateSubmissionDto,
   ListMissionsQuery,
   ListSubmissionsQuery,
+  MissionOutletsQuery,
   ManualResultDto,
   MissionPayDto,
   RejectSubmissionDto,
@@ -209,6 +210,19 @@ export class MissionsController {
     @Body() dto: ManualResultDto,
   ) {
     return this.missions.setManualResult(user, id, dto.achieved);
+  }
+
+  /**
+   * Mission de visites : ses points de vente, à visiter d'abord (les plus proches si la
+   * position est donnée), puis ceux déjà visités.
+   */
+  @Get('missions/:id/outlets')
+  outlets(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: MissionOutletsQuery,
+  ) {
+    return this.missions.missionOutlets(user, id, query);
   }
 
   /** Formulaires d'une mission, du plus récent au plus ancien, filtrables par agent, statut et période. */
