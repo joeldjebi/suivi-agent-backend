@@ -1302,6 +1302,233 @@ describe('Catalogue de produits et relevés par produit', () => {
   });
 });
 
+describe('Tableaux de bord des relevés produits', () => {
+  it('ruptures, ventes, pertes, prix face à la concurrence, par zone et par point de vente', async () => {
+    const t = await newTenant(app);
+    const plateau = await t.createZone('Plateau', PLATEAU);
+    const cocody = await t.createZone('Cocody', COCODY);
+    const agent = await t.createUser('agent');
+    const lead = await t.createUser('team_lead');
+    const product = async (name: string, own = true) =>
+      (
+        await t.admin.api
+          .post('/products', {
+            name,
+            own,
+            unit: 'Bouteille',
+            category: 'Boissons',
+            packagings: [{ name: 'Casier', units: 12 }],
+          })
+          .expect(201)
+      ).body as Body;
+    const coca = await product('Coca-Cola');
+    const fanta = await product('Fanta');
+    const pepsi = await product('Pepsi', false);
+    const outlet = async (name: string, at: { lat: number; lng: number }) =>
+      (
+        await t.admin.api
+          .post('/outlets', { name, ...at, force: true })
+          .expect(201)
+      ).body as Body;
+    const inCocody = { lat: 5.355, lng: -3.98 };
+    const a = await outlet('Boutique A', IN_PLATEAU);
+    const b = await outlet('Boutique B', {
+      lat: IN_PLATEAU.lat + 0.003,
+      lng: IN_PLATEAU.lng,
+    });
+    const c = await outlet('Boutique C', inCocody);
+    const type = (
+      await t.admin.api
+        .post('/mission-types', {
+          name: 'Relevé',
+          fields: [
+            {
+              key: 'releve',
+              label: 'Relevé',
+              type: 'products',
+              required: true,
+              products: {
+                scope: 'all',
+                measures: ['presence', 'stock', 'price', 'sold', 'losses'],
+              },
+            },
+          ],
+        })
+        .expect(201)
+    ).body as { id: string };
+    const mission = (
+      await t.admin.api
+        .post('/missions', {
+          typeId: type.id,
+          title: 'Relevés',
+          zoneIds: [plateau.id, cocody.id],
+          progressMethod: 'outlets',
+          visitMode: 'free',
+          targetValue: 10,
+        })
+        .expect(201)
+    ).body as Body;
+    await agent.api.post('/zone-requests', { zoneId: plateau.id }).expect(201);
+    await agent.api.post('/days/start').expect(200);
+    const visit = (o: Body, releve: object, order: number) =>
+      agent.api
+        .post(`/missions/${mission.id}/submissions`, {
+          clientId: randomUUID(),
+          data: { releve },
+          lat: o.lat,
+          lng: o.lng,
+          outletId: o.id,
+          submittedAt: new Date(Date.now() + order * 1000).toISOString(),
+        })
+        .expect(201);
+    await visit(
+      a,
+      {
+        [coca.id]: { presence: true, stock: 24, price: 300, sold: 10 },
+        [pepsi.id]: { presence: true, price: 250, sold: 4 },
+      },
+      1,
+    );
+    await visit(a, { [coca.id]: { presence: false, sold: 5, losses: 2 } }, 3);
+    await visit(
+      b,
+      {
+        [coca.id]: { presence: true, price: 350, sold: 8 },
+        [fanta.id]: { presence: false },
+      },
+      2,
+    );
+    await visit(
+      c,
+      {
+        [coca.id]: { presence: true, price: 400 },
+        [pepsi.id]: { presence: true, price: 300 },
+      },
+      4,
+    );
+
+    const api = t.admin.api;
+    const overview = (await api.get('/insights/products/overview').expect(200))
+      .body;
+    expect(overview).toMatchObject({
+      visits: 4,
+      outlets: 3,
+      products: 3,
+      ownStockouts: 2,
+      ownChecked: 4,
+      stockoutRate: 50,
+      ownSold: 23,
+      competitorSold: 4,
+      ownLosses: 2,
+    });
+
+    const stock = (await api.get('/insights/products/stockouts').expect(200))
+      .body;
+    expect(
+      stock.byProduct.map((p: Body) => [
+        p.name,
+        p.checked,
+        p.stockouts,
+        p.rate,
+      ]),
+    ).toEqual([
+      ['Fanta', 1, 1, 100],
+      ['Coca-Cola', 3, 1, 33],
+      ['Pepsi', 2, 0, 0],
+    ]);
+    expect(
+      stock.outlets
+        .map((o: Body) => [o.productName, o.outletName, o.zone])
+        .sort(),
+    ).toEqual([
+      ['Coca-Cola', 'Boutique A', 'Plateau'],
+      ['Fanta', 'Boutique B', 'Plateau'],
+    ]);
+
+    const sales = (await api.get('/insights/products/sales').expect(200)).body;
+    expect(
+      sales.products.map((p: Body) => [p.name, p.sold, p.losses, p.outlets]),
+    ).toEqual([
+      ['Coca-Cola', 23, 2, 3],
+      ['Pepsi', 4, 0, 2],
+    ]);
+    expect(sales.lossOutlets).toEqual([
+      {
+        outletId: a.id,
+        outletName: 'Boutique A',
+        zone: 'Plateau',
+        losses: 2,
+        products: 1,
+      },
+    ]);
+
+    const prices = (await api.get('/insights/products/prices').expect(200))
+      .body;
+    const cocaPrice = prices.products.find((p: Body) => p.name === 'Coca-Cola');
+    expect(cocaPrice).toMatchObject({
+      avg: 350,
+      min: 300,
+      max: 400,
+      readings: 3,
+    });
+    expect(cocaPrice.zones).toEqual([
+      { zone: 'Cocody', avg: 400 },
+      { zone: 'Plateau', avg: 325 },
+    ]);
+    expect(prices.categories).toEqual([
+      { category: 'Boissons', own: 350, competitor: 275, gapPercent: 27 },
+    ]);
+
+    // Filtres : une zone, la concurrence seulement.
+    expect(
+      (
+        await api
+          .get(`/insights/products/overview?zoneId=${cocody.id}`)
+          .expect(200)
+      ).body,
+    ).toMatchObject({ visits: 1, outlets: 1, ownStockouts: 0 });
+    expect(
+      (
+        (await api.get('/insights/products/sales?side=competitor').expect(200))
+          .body.products as Body[]
+      ).map((p) => p.name),
+    ).toEqual(['Pepsi']);
+    // Période sans relevé.
+    expect(
+      (
+        await api
+          .get('/insights/products/overview?from=2020-01-01&to=2020-01-31')
+          .expect(200)
+      ).body,
+    ).toMatchObject({ visits: 0, stockoutRate: null });
+    await api
+      .get('/insights/products/overview?from=2026-02-01&to=2026-01-01')
+      .expect(400);
+
+    // Point de vente : dernier relevé de chaque produit et évolution du stock.
+    const fiche = (
+      await api.get(`/insights/products/outlets/${a.id}`).expect(200)
+    ).body as Body[];
+    expect(fiche.map((p) => [p.name, p.last.presence, p.last.stock])).toEqual([
+      ['Coca-Cola', false, null],
+      ['Pepsi', true, null],
+    ]);
+    expect(fiche[0].stockHistory.map((h: Body) => h.stock)).toEqual([24]);
+
+    // Chef : les relevés de son équipe seulement ; agent : pas d'accès.
+    expect(
+      (await lead.api.get('/insights/products/overview').expect(200)).body
+        .visits,
+    ).toBe(0);
+    await t.createGroup('Nord', lead.id, [agent.id], [plateau.id, cocody.id]);
+    expect(
+      (await lead.api.get('/insights/products/overview').expect(200)).body
+        .visits,
+    ).toBe(4);
+    await agent.api.get('/insights/products/overview').expect(403);
+  });
+});
+
 describe('Recherche de lieux pour créer une zone', () => {
   it('trouve une commune sans tenir compte des accents', async () => {
     const t = await newTenant(app);
