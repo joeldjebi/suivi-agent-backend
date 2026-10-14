@@ -3,6 +3,7 @@ import {
   Feature,
   FieldType,
   type MissionEarnings,
+  type MissionField,
   type MissionPay,
   MissionStatus,
   ProgressMethod,
@@ -45,6 +46,7 @@ import {
   type OutletView,
 } from '../outlets/outlets.service';
 import { PhotosService } from '../photos/photos.service';
+import { ProductsService } from '../products/products.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { normalizePay } from './mission-pay';
 import { MissionTypesService } from './mission-types.service';
@@ -99,6 +101,7 @@ export class MissionsService {
     private readonly subscriptions: SubscriptionsService,
     private readonly photos: PhotosService,
     private readonly outlets: OutletsService,
+    private readonly products: ProductsService,
   ) {}
 
   async list(user: AuthUser, query: ListMissionsQuery) {
@@ -210,11 +213,14 @@ export class MissionsService {
     const progress = await this.progress(mission);
     const contributions = await this.contributions(mission);
     const zones = (await this.zonesOf([mission.id])).get(mission.id) ?? [];
+    // Relevés par produit : les produits de chaque champ (formulaire, même hors ligne).
+    const products = await this.products.forFields(type.fields);
     if (user.role === Role.Agent) {
       const mine = contributions.find((c) => c.agentId === user.id);
       return {
         ...this.view(user, mission),
         zones,
+        products,
         myEarnings: await this.earnings(user, mission, type),
         type: this.types.view(user, type),
         progress,
@@ -229,6 +235,7 @@ export class MissionsService {
     return {
       ...this.view(user, mission),
       zones,
+      products,
       type: this.types.view(user, type),
       progress,
       contributions,
@@ -585,7 +592,17 @@ export class MissionsService {
       throw conflict('MISSION_CLOSED', 'Cette mission est clôturée');
     }
     const type = await this.types.get(mission.typeId);
-    const data = validateData(type.fields, dto.data);
+    const productsByField = await this.products.forFields(type.fields);
+    const data = validateData(
+      type.fields,
+      dto.data,
+      Object.fromEntries(
+        Object.entries(productsByField).map(([key, list]) => [
+          key,
+          new Set(list.map((p) => p.id)),
+        ]),
+      ),
+    );
     const photoIds = photoIdsOf(type.fields, data);
     await this.photos.assertUsable(user.id, photoIds);
 
@@ -646,6 +663,7 @@ export class MissionsService {
       status: SubmissionStatus.Accepted,
     });
     await this.photos.attach(saved.id, photoIds);
+    await this.saveReadings(saved, type.fields);
     if (visit) {
       if (visit.outlet.lat == null && dto.lat != null && dto.lng != null)
         await this.outlets.locateFromVisit(
@@ -978,6 +996,43 @@ export class MissionsService {
         { distance, radius },
       );
     return { outlet, distance };
+  }
+
+  /** Relevés par produit : une ligne par produit, pour les tableaux de bord. */
+  private async saveReadings(
+    submission: MissionSubmission,
+    fields: MissionField[],
+  ) {
+    for (const field of fields) {
+      if (field.type !== FieldType.Products) continue;
+      const readings = submission.data[field.key] as
+        Record<string, Record<string, number | boolean>> | undefined;
+      if (!readings) continue;
+      for (const [productId, r] of Object.entries(readings)) {
+        await this.db.manager.query(
+          `INSERT INTO product_readings (tenant_id, submission_id, mission_id, outlet_id, agent_id,
+                                         product_id, field_key, presence, stock, price, sold, losses,
+                                         ordered, submitted_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+          [
+            this.db.tenantId,
+            submission.id,
+            submission.missionId,
+            submission.outletId,
+            submission.agentId,
+            productId,
+            field.key,
+            r.presence ?? null,
+            r.stock ?? null,
+            r.price ?? null,
+            r.sold ?? null,
+            r.losses ?? null,
+            r.ordered ?? null,
+            submission.submittedAt,
+          ],
+        );
+      }
+    }
   }
 
   /** Points de vente visibles par l'utilisateur. */

@@ -22,6 +22,8 @@ export interface MissionField {
   type: import('./enums').FieldType;
   required: boolean;
   options?: string[];
+  /** Relevé par produit : produits concernés et mesures relevées */
+  products?: import('./products').ProductFieldConfig;
 }
 
 /** Position diffusée en temps réel à la carte web. */

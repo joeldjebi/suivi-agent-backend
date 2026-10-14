@@ -29,6 +29,7 @@ import {
   PASSWORD,
   PLATEAU,
   resetDatabase,
+  type Tenant,
   uniqueEmail,
   uniquePhone,
   YOPOUGON,
@@ -1031,6 +1032,273 @@ describe('Missions de visites de points de vente', () => {
         targetValue: 3,
       })
       .expect(402);
+  });
+});
+
+describe('Catalogue de produits et relevés par produit', () => {
+  const product = async (t: Tenant, body: object) =>
+    (
+      await t.admin.api
+        .post('/products', { own: true, unit: 'Bouteille', ...body })
+        .expect(201)
+    ).body as Body;
+
+  it('catalogue : unités et conditionnements, produits concurrents, formule', async () => {
+    const t = await newTenant(app);
+    const agent = await t.createUser('agent');
+    const coca = await product(t, {
+      name: 'Coca-Cola',
+      format: '33 cl',
+      category: 'Boissons',
+      packagings: [
+        { name: 'Casier', units: 12 },
+        { name: 'Pack', units: 6 },
+        { name: 'casier', units: 24 },
+      ],
+    });
+    expect(coca.packagings).toEqual([
+      { name: 'Pack', units: 6 },
+      { name: 'Casier', units: 12 },
+    ]);
+    await product(t, { name: 'Pepsi', own: false, category: 'Boissons' });
+    await t.admin.api
+      .post('/products', {
+        name: 'Sac',
+        own: true,
+        unit: 'Kg',
+        packagings: [{ name: 'Sac', units: 1 }],
+      })
+      .expect(400);
+    await agent.api
+      .post('/products', { name: 'X', own: true, unit: 'Unité' })
+      .expect(403);
+    const listed = (await agent.api.get('/products').expect(200))
+      .body as Body[];
+    expect(listed.map((p) => [p.name, p.own])).toEqual([
+      ['Coca-Cola', true],
+      ['Pepsi', false],
+    ]);
+    expect(
+      (
+        (await agent.api.get('/products?side=competitor').expect(200))
+          .body as Body[]
+      ).map((p) => p.name),
+    ).toEqual(['Pepsi']);
+    await t.admin.api
+      .patch(`/products/${coca.id}`, { isActive: false })
+      .expect(200);
+    expect((await agent.api.get('/products').expect(200)).body).toHaveLength(1);
+    expect(
+      (await t.admin.api.get('/products?includeInactive=true').expect(200))
+        .body,
+    ).toHaveLength(2);
+    // Jamais relevé : supprimable.
+    await t.admin.api.delete(`/products/${coca.id}`).expect(204);
+
+    // Les relevés produits demandent aussi les points de vente.
+    const email = uniqueEmail('sa-produits');
+    await owner.query(
+      `INSERT INTO platform_admins (email, password_hash, first_name, last_name)
+       VALUES ($1, $2, 'Awa', 'Éditeur')`,
+      [email, await hashPassword('Editeur2026!')],
+    );
+    const login = await new Api(app)
+      .post('/platform/auth/login', { email, password: 'Editeur2026!' })
+      .expect(200);
+    const sa = new Api(app, login.body.accessToken as string);
+    await sa
+      .patch('/platform/plans/base', { features: ['product_audits'] })
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('FEATURE_DEPENDENCY'));
+
+    await owner.query(
+      `UPDATE subscriptions SET plan_code = 'advanced', status = 'active', trial_ends_at = NULL WHERE tenant_id = $1`,
+      [t.tenantId],
+    );
+    app.get(SubscriptionsService).invalidate(t.tenantId);
+    await agent.api.get('/products').expect(402);
+  });
+
+  it('import du catalogue : conditionnements, concurrents, lignes écartées', async () => {
+    const t = await newTenant(app);
+    await product(t, { name: 'Fanta', format: '33 cl' });
+    await t.admin.api.get('/products/import/template').expect(200);
+    const csv = [
+      'Nom;Marque;Catégorie;Format;Concurrent;Unité;Conditionnement 1;Unités 1;Conditionnement 2;Unités 2',
+      'Coca-Cola;Coca-Cola;Boissons;33 cl;Non;Bouteille;Casier;12;Pack;6',
+      'Pepsi;PepsiCo;Boissons;33 cl;Oui;Bouteille;;;;',
+      ';X;;;;;;;;',
+      'Sprite;;;33 cl;Peut-être;;;;;',
+      'Malta;;;;;;Carton;1;;',
+      'Fanta;;;33 cl;;;;;;',
+    ].join('\r\n');
+    const res = (
+      await request(app.getHttpServer())
+        .post('/api/products/import')
+        .set('Authorization', `Bearer ${t.admin.api.token}`)
+        .attach('file', Buffer.from(csv, 'utf8'), 'produits.csv')
+        .expect(201)
+    ).body;
+    expect(res.created).toBe(2);
+    expect(res.skipped.map((s: Body) => [s.row, s.reason])).toEqual([
+      [4, 'Nom manquant'],
+      [5, 'Concurrent : « Oui » ou « Non » attendu'],
+      [
+        6,
+        'Conditionnement : le nombre d’unités doit être un entier d’au moins 2',
+      ],
+      [7, 'Déjà présent'],
+    ]);
+    const list = (await t.admin.api.get('/products').expect(200))
+      .body as Body[];
+    expect(list.find((p) => p.name === 'Coca-Cola')).toMatchObject({
+      own: true,
+      unit: 'Bouteille',
+      packagings: [
+        { name: 'Pack', units: 6 },
+        { name: 'Casier', units: 12 },
+      ],
+    });
+    expect(list.find((p) => p.name === 'Pepsi')).toMatchObject({ own: false });
+  });
+
+  it('relevé pendant une visite : produits et mesures choisis, une ligne par produit', async () => {
+    const t = await newTenant(app);
+    const plateau = await t.createZone('Plateau', PLATEAU);
+    const agent = await t.createUser('agent');
+    const coca = await product(t, { name: 'Coca-Cola', format: '33 cl' });
+    const pepsi = await product(t, { name: 'Pepsi', own: false });
+    const old = await product(t, { name: 'Ancien' });
+    await t.admin.api
+      .patch(`/products/${old.id}`, { isActive: false })
+      .expect(200);
+    const outlet = (
+      await t.admin.api
+        .post('/outlets', { name: 'Boutique Awa', ...IN_PLATEAU })
+        .expect(201)
+    ).body as Body;
+
+    const field = (products: object) => ({
+      name: 'Relevé',
+      fields: [
+        {
+          key: 'releve',
+          label: 'Relevé',
+          type: 'products',
+          required: true,
+          products,
+        },
+      ],
+    });
+    await t.admin.api
+      .post('/mission-types', field({ scope: 'all', measures: [] }))
+      .expect(400);
+    await t.admin.api
+      .post(
+        '/mission-types',
+        field({
+          scope: 'selected',
+          productIds: [randomUUID()],
+          measures: ['stock'],
+        }),
+      )
+      .expect(404);
+    const type = (
+      await t.admin.api
+        .post(
+          '/mission-types',
+          field({ scope: 'all', measures: ['presence', 'stock', 'price'] }),
+        )
+        .expect(201)
+    ).body as { id: string };
+    // Pas de relevé par produit dans la fiche des points de vente.
+    await t.admin.api
+      .put('/outlets/form', {
+        fields: [
+          {
+            key: 'r',
+            label: 'R',
+            type: 'products',
+            required: false,
+            products: { scope: 'all', measures: ['stock'] },
+          },
+        ],
+      })
+      .expect(400);
+
+    const mission = (
+      await t.admin.api
+        .post('/missions', {
+          typeId: type.id,
+          title: 'Relevé des prix',
+          zoneIds: [plateau.id],
+          progressMethod: 'outlets',
+          visitMode: 'free',
+          targetValue: 5,
+        })
+        .expect(201)
+    ).body as Body;
+    await agent.api.post('/zone-requests', { zoneId: plateau.id }).expect(201);
+    await agent.api.post('/days/start').expect(200);
+    const detail = (await agent.api.get(`/missions/${mission.id}`).expect(200))
+      .body;
+    expect((detail.products.releve as Body[]).map((p) => p.name)).toEqual([
+      'Coca-Cola',
+      'Pepsi',
+    ]);
+
+    const send = (releve: object) =>
+      agent.api.post(`/missions/${mission.id}/submissions`, {
+        clientId: randomUUID(),
+        data: { releve },
+        ...IN_PLATEAU,
+        outletId: outlet.id,
+        submittedAt: new Date().toISOString(),
+      });
+    await send({ [old.id]: { stock: 3 } }).expect(400);
+    await send({ [coca.id]: { sold: 3 } }).expect(400);
+    await send({ [coca.id]: { stock: -1 } }).expect(400);
+    await send({ [coca.id]: { stock: null } })
+      .expect(400)
+      .expect((r) => expect(r.body.message).toContain('obligatoire'));
+    await send({
+      [coca.id]: { presence: true, stock: 41, price: 500 },
+      [pepsi.id]: { presence: false },
+    }).expect(201);
+
+    const rows = await owner.query<Body[]>(
+      `SELECT product_id AS "productId", outlet_id AS "outletId", presence, stock::float8 AS stock, price::float8 AS price
+       FROM product_readings WHERE mission_id = $1 ORDER BY stock NULLS LAST`,
+      [mission.id],
+    );
+    expect(rows).toEqual([
+      {
+        productId: coca.id,
+        outletId: outlet.id,
+        presence: true,
+        stock: 41,
+        price: 500,
+      },
+      {
+        productId: pepsi.id,
+        outletId: outlet.id,
+        presence: false,
+        stock: null,
+        price: null,
+      },
+    ]);
+    // Déjà relevé : plus supprimable, seulement désactivable.
+    await t.admin.api
+      .delete(`/products/${coca.id}`)
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('PRODUCT_IN_USE'));
+
+    const csv = await t.admin.api
+      .get(`/exports/submissions?missionId=${mission.id}&format=csv`)
+      .expect(200);
+    expect(csv.text).toContain(
+      'Coca-Cola : présent, stock 41, prix 500 ; Pepsi : rupture',
+    );
   });
 });
 
@@ -4778,7 +5046,7 @@ describe('Abonnement des structures', () => {
       'enterprise',
     ]);
     const me = (await t.admin.api.get('/auth/me').expect(200)).body;
-    expect(me.subscription.features).toHaveLength(11);
+    expect(me.subscription.features).toHaveLength(12);
     await t.admin.api.get('/stats/overview').expect(200);
 
     // Engagement annuel : remise, et pas de retour au mensuel avant son terme.
@@ -7131,7 +7399,7 @@ describe('Espace éditeur (super administrateur)', () => {
       planCode: 'base',
     });
     // Essai : toutes les fonctionnalités, quotas de la formule d'essai.
-    expect(sub.features).toHaveLength(11);
+    expect(sub.features).toHaveLength(12);
     expect(sub.usage.agents.limit).toBe(30);
     await sa
       .patch('/platform/settings', {

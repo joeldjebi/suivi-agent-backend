@@ -1,5 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { Feature, type MissionPay, Role } from '@suivi/shared';
+import {
+  Feature,
+  FieldType,
+  type MissionField,
+  type MissionPay,
+  Role,
+} from '@suivi/shared';
 import type { AuthUser } from '../common/auth-user';
 import { forbidden, notFound } from '../common/business.exception';
 import { DbService } from '../common/db.service';
@@ -64,8 +70,27 @@ export class MissionTypesService {
     return type;
   }
 
-  create(dto: CreateMissionTypeDto): Promise<MissionType> {
+  /** Relevé par produit : formule qui l'inclut, et produits choisis existants. */
+  private async assertProductFields(fields: MissionField[]) {
+    const productFields = fields.filter((f) => f.type === FieldType.Products);
+    if (!productFields.length) return;
+    await this.subscriptions.assertFeature(
+      this.db.tenantId,
+      Feature.ProductAudits,
+    );
+    const ids = productFields.flatMap((f) => f.products?.productIds ?? []);
+    if (ids.length) {
+      const [{ found }] = await this.db.manager.query<{ found: number }[]>(
+        `SELECT count(*)::int AS found FROM products WHERE id = ANY($1::uuid[])`,
+        [[...new Set(ids)]],
+      );
+      if (found !== new Set(ids).size) throw notFound('Produit');
+    }
+  }
+
+  async create(dto: CreateMissionTypeDto): Promise<MissionType> {
     assertFields(dto.fields);
+    await this.assertProductFields(dto.fields);
     return this.db.manager.save(MissionType, {
       tenantId: this.db.tenantId,
       name: dto.name,
@@ -77,7 +102,10 @@ export class MissionTypesService {
 
   async update(id: string, dto: UpdateMissionTypeDto): Promise<MissionType> {
     await this.get(id);
-    if (dto.fields) assertFields(dto.fields);
+    if (dto.fields) {
+      assertFields(dto.fields);
+      await this.assertProductFields(dto.fields);
+    }
     await this.db.manager.update(
       MissionType,
       { id },

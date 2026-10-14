@@ -197,6 +197,49 @@ export class ExportsService {
         : []
       ).map((p) => [p.id, p]),
     );
+    // Relevés par produit : une ligne lisible « Produit : stock 41, prix 500 ; … ».
+    const productNames = new Map(
+      type.fields.some((f) => f.type === FieldType.Products)
+        ? (
+            await m.query<{ id: string; name: string }[]>(
+              `SELECT id, name FROM products ORDER BY own DESC, category NULLS LAST, name`,
+            )
+          ).map((p) => [p.id, p.name] as const)
+        : [],
+    );
+    const catalog = [...productNames.keys()];
+    const MEASURE: Record<string, string> = {
+      stock: 'stock',
+      price: 'prix',
+      sold: 'vendu',
+      losses: 'pertes',
+      ordered: 'commandé',
+    };
+    const readings = (v: unknown): string =>
+      Object.entries(v as Record<string, Record<string, unknown>>)
+        // Ordre du catalogue : nos produits d'abord.
+        .sort(([a], [b]) => catalog.indexOf(a) - catalog.indexOf(b))
+        .map(([id, r]) => {
+          const order = [
+            'presence',
+            'stock',
+            'price',
+            'sold',
+            'losses',
+            'ordered',
+          ];
+          const parts = Object.entries(r)
+            .sort(([a], [b]) => order.indexOf(a) - order.indexOf(b))
+            .map(([k, x]) =>
+              k === 'presence'
+                ? x
+                  ? 'présent'
+                  : 'rupture'
+                : `${MEASURE[k] ?? k} ${String(x)}`,
+            );
+          return `${productNames.get(id) ?? 'Produit'} : ${parts.join(', ')}`;
+        })
+        .join(' ; ');
     const kind = (f: MissionField): ColumnKind =>
       f.type === FieldType.Number
         ? 'general'
@@ -206,6 +249,7 @@ export class ExportsService {
     const value = (f: MissionField, v: unknown): Cell => {
       if (v === undefined || v === null || v === '') return null;
       if (f.type === FieldType.Boolean) return v ? 'Oui' : 'Non';
+      if (f.type === FieldType.Products) return readings(v);
       if (f.type === FieldType.Photo) {
         const p = typeof v === 'string' ? photos.get(v) : undefined;
         if (!p) return 'Photo';

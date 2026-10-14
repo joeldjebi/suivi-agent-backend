@@ -7,3 +7,4 @@ export * from './support';
 export * from './onboarding';
 export * from './onboarding-slides';
 export * from './outlets';
+export * from './products';

@@ -1181,6 +1181,7 @@ export class PlatformService {
 
   /** Nouvelle formule : proposée aux structures dès sa création (sauf si retirée). */
   async createPlan(admin: PlatformUser, dto: CreatePlanDto) {
+    assertFeatureDependencies(dto.features);
     const m = this.db.manager;
     if (await m.findOneBy(Plan, { code: dto.code }))
       throw conflict('PLAN_CODE_TAKEN', 'Ce code de formule existe déjà');
@@ -1217,6 +1218,7 @@ export class PlatformService {
    * Les avantages retirés sont signalés avec les structures qui s'en servent.
    */
   async updatePlan(admin: PlatformUser, code: string, dto: UpdatePlanDto) {
+    if (dto.features) assertFeatureDependencies(dto.features);
     const m = this.db.manager;
     const plan = await this.planOrFail(code);
     if (dto.isActive === false && plan.isActive) {
@@ -1355,4 +1357,16 @@ export class PlatformService {
     });
     return this.settings();
   }
+}
+
+/** Les relevés produits se font pendant les visites des points de vente. */
+function assertFeatureDependencies(features: Feature[]) {
+  if (
+    features.includes(Feature.ProductAudits) &&
+    !features.includes(Feature.PointsOfSale)
+  )
+    throw badRequest(
+      'FEATURE_DEPENDENCY',
+      'Les relevés produits demandent aussi les points de vente',
+    );
 }

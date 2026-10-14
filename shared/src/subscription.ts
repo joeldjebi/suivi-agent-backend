@@ -56,6 +56,8 @@ export const Feature = {
   PushNotifications: 'push_notifications',
   /** Répertoire des points de vente : identification sur le terrain, statuts, import et export */
   PointsOfSale: 'points_of_sale',
+  /** Catalogue de produits et relevés par produit (stocks, prix, ventes, pertes, concurrence) ; demande les points de vente */
+  ProductAudits: 'product_audits',
 } as const;
 export type Feature = (typeof Feature)[keyof typeof Feature];
 

@@ -3,6 +3,8 @@ import {
   FieldType,
   MissionStatus,
   OutletStatus,
+  ProductMeasure,
+  ProductScope,
   ProgressMethod,
   SubmissionStatus,
   VisitMode,
@@ -33,6 +35,27 @@ import {
 } from 'class-validator';
 import { PaginationQuery } from '../common/pagination.dto';
 
+export class ProductFieldConfigDto {
+  @IsIn(Object.values(ProductScope))
+  scope: ProductScope;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(500)
+  @IsUUID('all', { each: true })
+  productIds?: string[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  category?: string | null;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsIn(Object.values(ProductMeasure), { each: true })
+  measures: ProductMeasure[];
+}
+
 export class MissionFieldDto {
   /** Identifiant technique du champ (minuscules, chiffres, _) */
   @Matches(/^[a-z][a-z0-9_]{0,49}$/)
@@ -53,6 +76,12 @@ export class MissionFieldDto {
   @IsArray()
   @IsString({ each: true })
   options?: string[];
+
+  /** Relevé par produit : produits concernés et mesures */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ProductFieldConfigDto)
+  products?: ProductFieldConfigDto;
 }
 
 export class CreateMissionTypeDto {

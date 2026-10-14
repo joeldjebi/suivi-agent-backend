@@ -151,6 +151,11 @@ export class OutletsService {
 
   async setFields(fields: MissionField[]) {
     assertFields(fields);
+    if (fields.some((f) => f.type === FieldType.Products))
+      throw badRequest(
+        'INVALID_FIELD',
+        'Le relevé par produit se fait pendant les visites, pas dans la fiche',
+      );
     await this.db.manager.query(
       `UPDATE tenant_settings SET outlet_fields = $1::jsonb WHERE tenant_id = $2`,
       [JSON.stringify(fields), this.db.tenantId],

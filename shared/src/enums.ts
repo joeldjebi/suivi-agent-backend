@@ -83,5 +83,7 @@ export const FieldType = {
   Select: 'select',
   /** Photo prise sur le terrain, avec sa position et son heure */
   Photo: 'photo',
+  /** Relevé par produit : une ligne par produit du catalogue, mesures choisies par la structure */
+  Products: 'products',
 } as const;
 export type FieldType = (typeof FieldType)[keyof typeof FieldType];
