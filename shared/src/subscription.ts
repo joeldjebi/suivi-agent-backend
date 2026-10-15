@@ -58,6 +58,8 @@ export const Feature = {
   PointsOfSale: 'points_of_sale',
   /** Catalogue de produits et relevés par produit (stocks, prix, ventes, pertes, concurrence) ; demande les points de vente */
   ProductAudits: 'product_audits',
+  /** Prise de commande terrain : types de client, prix, commandes et leur suivi ; demande les points de vente */
+  Orders: 'orders',
 } as const;
 export type Feature = (typeof Feature)[keyof typeof Feature];
 

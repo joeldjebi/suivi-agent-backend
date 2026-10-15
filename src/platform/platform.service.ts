@@ -1362,6 +1362,14 @@ export class PlatformService {
 /** Les relevés produits se font pendant les visites des points de vente. */
 function assertFeatureDependencies(features: Feature[]) {
   if (
+    features.includes(Feature.Orders) &&
+    !features.includes(Feature.PointsOfSale)
+  )
+    throw badRequest(
+      'FEATURE_DEPENDENCY',
+      'La prise de commande demande aussi les points de vente',
+    );
+  if (
     features.includes(Feature.ProductAudits) &&
     !features.includes(Feature.PointsOfSale)
   )

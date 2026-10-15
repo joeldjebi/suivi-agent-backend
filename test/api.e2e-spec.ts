@@ -1725,6 +1725,8 @@ describe('Modules indépendants : points de vente sans missions', () => {
     const agent = await t.createUser('agent');
     const lead = await t.createUser('team_lead');
     await t.admin.api.get('/missions').expect(402);
+    // Prise de commande : hors de cette formule.
+    await t.admin.api.get('/orders/price-lists').expect(402);
 
     // Les formulaires (socle commun) restent utilisables par le module Points de vente.
     const coca = (
@@ -5622,7 +5624,7 @@ describe('Abonnement des structures', () => {
       'enterprise',
     ]);
     const me = (await t.admin.api.get('/auth/me').expect(200)).body;
-    expect(me.subscription.features).toHaveLength(12);
+    expect(me.subscription.features).toHaveLength(13);
     await t.admin.api.get('/stats/overview').expect(200);
 
     // Engagement annuel : remise, et pas de retour au mensuel avant son terme.
@@ -7975,7 +7977,7 @@ describe('Espace éditeur (super administrateur)', () => {
       planCode: 'base',
     });
     // Essai : toutes les fonctionnalités, quotas de la formule d'essai.
-    expect(sub.features).toHaveLength(12);
+    expect(sub.features).toHaveLength(13);
     expect(sub.usage.agents.limit).toBe(30);
     await sa
       .patch('/platform/settings', {
@@ -8752,5 +8754,239 @@ describe('Sorties de zone', () => {
       zoneExitToleranceMeters: 50,
       zoneExitAlertMinutes: 10,
     });
+  });
+});
+
+describe('Prise de commande', () => {
+  it('types de client et prix, commande aux prix du point de vente, statuts et chiffres', async () => {
+    const t = await newTenant(app);
+    await t.createZone('Plateau', PLATEAU);
+    const agent = await t.createUser('agent');
+    const other = await t.createUser('agent');
+    const admin = t.admin.api;
+    const product = async (name: string, own = true) =>
+      (
+        await admin
+          .post('/products', {
+            name,
+            own,
+            format: '33 cl',
+            unit: 'Bouteille',
+            packagings: [{ name: 'Casier', units: 12 }],
+          })
+          .expect(201)
+      ).body as Body;
+    const coca = await product('Coca-Cola');
+    const fanta = await product('Fanta');
+    const pepsi = await product('Pepsi', false);
+
+    // Types de client : le premier créé s'applique par défaut.
+    const detail = (
+      await admin
+        .post('/orders/price-lists', { name: 'Détaillant' })
+        .expect(201)
+    ).body as Body;
+    expect(detail.isDefault).toBe(true);
+    const gros = (
+      await admin.post('/orders/price-lists', { name: 'Grossiste' }).expect(201)
+    ).body as Body;
+    expect(gros.isDefault).toBe(false);
+    await admin.post('/orders/price-lists', { name: 'grossiste' }).expect(409);
+    await agent.api.post('/orders/price-lists', { name: 'X' }).expect(403);
+    await admin
+      .patch(`/orders/price-lists/${detail.id}`, { isDefault: false })
+      .expect(400);
+
+    // Prix par unité de base ; pas de prix de vente pour la concurrence.
+    await admin
+      .put('/orders/prices', {
+        items: [{ priceListId: detail.id, productId: pepsi.id, price: 280 }],
+      })
+      .expect(400);
+    const grid = (
+      await admin
+        .put('/orders/prices', {
+          items: [
+            { priceListId: detail.id, productId: coca.id, price: 300 },
+            { priceListId: gros.id, productId: coca.id, price: 250 },
+            { priceListId: gros.id, productId: fanta.id, price: 200 },
+          ],
+        })
+        .expect(200)
+    ).body as Body;
+    expect(grid.currency).toBe('XOF');
+    const cocaRow = (grid.products as Body[]).find((p) => p.id === coca.id)!;
+    expect(cocaRow.prices).toEqual({ [detail.id]: 300, [gros.id]: 250 });
+    expect((grid.products as Body[]).map((p) => p.name)).not.toContain('Pepsi');
+
+    // Points de vente : A au type par défaut, B grossiste (réglé par un responsable).
+    const outlet = async (name: string, dLat: number) =>
+      (
+        await agent.api
+          .post('/outlets', {
+            name,
+            lat: IN_PLATEAU.lat + dLat,
+            lng: IN_PLATEAU.lng,
+            accuracy: 5,
+            force: true,
+          })
+          .expect(201)
+      ).body as Body;
+    const a = await outlet('Boutique A', 0);
+    const b = await outlet('Dépôt B', 0.003);
+    await agent.api
+      .patch(`/outlets/${b.id}`, { priceListId: gros.id })
+      .expect(403);
+    const patched = (
+      await admin
+        .patch(`/outlets/${b.id}`, { priceListId: gros.id })
+        .expect(200)
+    ).body as Body;
+    expect(patched.priceList).toEqual({ id: gros.id, name: 'Grossiste' });
+
+    // Catalogue de l'agent : les prix du type de client du point de vente.
+    const catA = (
+      await agent.api
+        .get('/orders/catalog')
+        .query({ outletId: a.id })
+        .expect(200)
+    ).body as Body;
+    expect(catA.priceList.name).toBe('Détaillant');
+    expect((catA.products as Body[]).map((p) => [p.name, p.price])).toEqual([
+      ['Coca-Cola', 300],
+    ]);
+    const catB = (
+      await agent.api
+        .get('/orders/catalog')
+        .query({ outletId: b.id })
+        .expect(200)
+    ).body as Body;
+    expect((catB.products as Body[]).map((p) => [p.name, p.price])).toEqual([
+      ['Coca-Cola', 250],
+      ['Fanta', 200],
+    ]);
+
+    // Prise de commande : le serveur calcule les prix ; même produit saisi deux fois additionné.
+    const clientId = '11111111-1111-4111-8111-111111111111';
+    const body = {
+      clientId,
+      outletId: a.id,
+      lines: [
+        { productId: coca.id, quantity: 24 },
+        { productId: coca.id, quantity: 6 },
+      ],
+      note: 'Livrer avant midi',
+      lat: IN_PLATEAU.lat,
+      lng: IN_PLATEAU.lng,
+    };
+    const first = (await agent.api.post('/orders', body).expect(201))
+      .body as Body;
+    expect(first).toMatchObject({
+      reference: 'CMD-000001',
+      status: 'taken',
+      total: 9000,
+      priceListName: 'Détaillant',
+      outletName: 'Boutique A',
+      distance: 0,
+    });
+    expect(first.lines).toEqual([
+      expect.objectContaining({
+        name: 'Coca-Cola 33 cl',
+        quantity: 30,
+        unitPrice: 300,
+        amount: 9000,
+      }),
+    ]);
+    // Renvoi (réseau coupé) : la même commande, pas de doublon.
+    expect(
+      ((await agent.api.post('/orders', body).expect(201)).body as Body).id,
+    ).toBe(first.id);
+    // Fanta : pas de prix pour un détaillant.
+    await agent.api
+      .post('/orders', {
+        clientId: '22222222-2222-4222-8222-222222222222',
+        outletId: a.id,
+        lines: [{ productId: fanta.id, quantity: 12 }],
+      })
+      .expect(400);
+    await admin
+      .post('/orders', {
+        ...body,
+        clientId: '33333333-3333-4333-8333-333333333333',
+      })
+      .expect(403);
+    const second = (
+      await agent.api
+        .post('/orders', {
+          clientId: '44444444-4444-4444-8444-444444444444',
+          outletId: b.id,
+          lines: [
+            { productId: coca.id, quantity: 12 },
+            { productId: fanta.id, quantity: 24 },
+          ],
+        })
+        .expect(201)
+    ).body as Body;
+    expect(second).toMatchObject({ reference: 'CMD-000002', total: 7800 });
+
+    // Statuts : livrée puis payée ; l'agent n'annule pas une commande livrée.
+    const status = (
+      who: typeof agent,
+      id: string,
+      s: string,
+      comment?: string,
+    ) => who.api.post(`/orders/${id}/status`, { status: s, comment });
+    await status(agent, first.id, 'delivered').expect(200);
+    await status(agent, first.id, 'cancelled', 'Erreur').expect(403);
+    await status(other, first.id, 'paid').expect(403);
+    const paid = (await status(agent, first.id, 'paid').expect(200))
+      .body as Body;
+    expect(paid.status).toBe('paid');
+    expect(paid.deliveredAt).not.toBeNull();
+    expect((paid.events as Body[]).map((e) => e.status)).toEqual([
+      'taken',
+      'delivered',
+      'paid',
+    ]);
+    await admin
+      .post(`/orders/${first.id}/status`, { status: 'cancelled', comment: 'x' })
+      .expect(409);
+    await status(agent, second.id, 'cancelled').expect(400);
+    await status(agent, second.id, 'cancelled', 'Client absent').expect(200);
+
+    // Chiffres : les annulées ne comptent pas dans le total.
+    const summary = (await admin.get('/orders/summary').expect(200))
+      .body as Body;
+    expect(summary).toMatchObject({
+      count: 1,
+      amount: 9000,
+      toCollect: 0,
+    });
+    expect(summary.byStatus.cancelled).toEqual({ count: 1, amount: 7800 });
+
+    // Un autre agent : pas les commandes de son collègue… sauf sur la fiche d'un point de vente.
+    expect(
+      ((await other.api.get('/orders').expect(200)).body as Body).total,
+    ).toBe(0);
+    const onA = (
+      await other.api.get('/orders').query({ outletId: a.id }).expect(200)
+    ).body as Body;
+    expect((onA.items as Body[]).map((o) => o.reference)).toEqual([
+      'CMD-000001',
+    ]);
+    const list = (
+      await admin.get('/orders').query({ status: 'cancelled' }).expect(200)
+    ).body as Body;
+    expect((list.items as Body[]).map((o) => o.cancelReason)).toEqual([
+      'Client absent',
+    ]);
+
+    // Type de client supprimé : ses points de vente reviennent au type par défaut.
+    await admin.delete(`/orders/price-lists/${detail.id}`).expect(400);
+    await admin.delete(`/orders/price-lists/${gros.id}`).expect(204);
+    expect(
+      ((await admin.get(`/outlets/${b.id}`).expect(200)).body as Body)
+        .priceList,
+    ).toBeNull();
   });
 });

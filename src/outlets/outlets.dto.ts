@@ -131,6 +131,11 @@ export class UpdateOutletDto extends OutletInfoDto {
   @IsNumber()
   @Min(0)
   accuracy?: number;
+
+  /** Type de client (liste de tarifs) ; null : celui par défaut. Responsables seulement. */
+  @IsOptional()
+  @IsUUID()
+  priceListId?: string | null;
 }
 
 export class ChangeOutletStatusDto {

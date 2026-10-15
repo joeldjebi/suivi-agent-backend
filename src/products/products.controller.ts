@@ -32,10 +32,10 @@ import {
 } from './products.dto';
 import { ProductsService } from './products.service';
 
-/** Catalogue de produits : formules qui incluent les relevés produits. */
+/** Catalogue de produits : formules qui incluent les relevés produits ou la prise de commande. */
 @ApiTags('Produits')
 @ApiBearerAuth()
-@RequiresFeature(Feature.ProductAudits)
+@RequiresFeature(Feature.ProductAudits, Feature.Orders)
 @Roles(Role.Admin, Role.TeamLead, Role.Agent)
 @Controller('products')
 export class ProductsController {

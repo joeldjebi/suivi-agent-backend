@@ -74,6 +74,8 @@ export interface OutletView {
   daysSinceVisit: number | null;
   /** Distance en mètres (recherche autour d'un point) */
   distance?: number;
+  /** Type de client (prise de commande) ; null : celui par défaut de la structure */
+  priceList: { id: string; name: string } | null;
 }
 
 interface Row {
@@ -101,6 +103,8 @@ interface Row {
   lastVisitAt: Date | null;
   overdue: boolean;
   distance?: number | null;
+  priceListId: string | null;
+  priceListName: string | null;
 }
 
 /**
@@ -121,7 +125,8 @@ const SELECT = `
   nullif(trim(coalesce(u.first_name, '') || ' ' || coalesce(u.last_name, '')), '') AS "createdByName",
   o.created_at AS "createdAt", o.updated_at AS "updatedAt",
   o.visit_frequency_days AS "visitFrequencyDays", freq.days AS "frequencyDays",
-  lv.at AS "lastVisitAt", ${OVERDUE} AS overdue`;
+  lv.at AS "lastVisitAt", ${OVERDUE} AS overdue,
+  o.price_list_id AS "priceListId", pl.name AS "priceListName"`;
 const FROM = `
   FROM outlets o
   LEFT JOIN LATERAL (
@@ -130,6 +135,7 @@ const FROM = `
     ORDER BY z.name LIMIT 1
   ) zz ON true
   LEFT JOIN users u ON u.id = o.created_by
+  LEFT JOIN price_lists pl ON pl.id = o.price_list_id
   LEFT JOIN LATERAL (
     SELECT max(ms.submitted_at) AS at FROM mission_submissions ms
     WHERE ms.outlet_id = o.id AND ms.status = 'accepted'
@@ -498,6 +504,18 @@ export class OutletsService {
       if (user.role === Role.Agent)
         throw forbidden('Seul un responsable règle la fréquence de visite');
       set('visit_frequency_days', dto.visitFrequencyDays);
+    }
+    if (dto.priceListId !== undefined) {
+      if (user.role === Role.Agent)
+        throw forbidden('Seul un responsable choisit le type de client');
+      if (dto.priceListId) {
+        const [list] = await this.db.manager.query<{ id: string }[]>(
+          `SELECT id FROM price_lists WHERE id = $1`,
+          [dto.priceListId],
+        );
+        if (!list) throw notFound('Type de client');
+      }
+      set('price_list_id', dto.priceListId ?? null);
     }
 
     const fields = await this.fields(user);
@@ -1155,6 +1173,9 @@ function view(r: Row): OutletView {
         )
       : null,
     ...(r.distance != null ? { distance: Math.round(Number(r.distance)) } : {}),
+    priceList: r.priceListId
+      ? { id: r.priceListId, name: r.priceListName ?? '' }
+      : null,
   };
 }
 

@@ -8,3 +8,4 @@ export * from './onboarding';
 export * from './onboarding-slides';
 export * from './outlets';
 export * from './products';
+export * from './orders';

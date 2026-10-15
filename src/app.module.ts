@@ -7,6 +7,7 @@ import { SetupModule } from './setup/setup.module';
 import { OutletsModule } from './outlets/outlets.module';
 import { ProductsModule } from './products/products.module';
 import { InsightsModule } from './insights/insights.module';
+import { OrdersModule } from './orders/orders.module';
 import { BroadcastsModule } from './broadcasts/broadcasts.module';
 import { PhotosModule } from './photos/photos.module';
 import { DevicesModule } from './devices/devices.module';
@@ -95,6 +96,7 @@ import { ZonesModule } from './zones/zones.module';
     OutletsModule,
     ProductsModule,
     InsightsModule,
+    OrdersModule,
     PhotosModule,
     DocsModule,
     ZoneRequestsModule,

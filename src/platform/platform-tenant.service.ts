@@ -339,7 +339,8 @@ export class PlatformTenantService {
               (SELECT period FROM pay_settings WHERE tenant_id = $1) AS "payPeriod",
               (SELECT count(*) FROM push_devices WHERE tenant_id = $1)::int AS devices,
               (SELECT count(*) FROM outlets WHERE tenant_id = $1)::int AS outlets,
-              (SELECT count(*) FROM products WHERE tenant_id = $1 AND is_active)::int AS products`,
+              (SELECT count(*) FROM products WHERE tenant_id = $1 AND is_active)::int AS products,
+              (SELECT count(*) FROM orders WHERE tenant_id = $1)::int AS orders`,
       [tenantId],
     );
     const customBranding =
@@ -378,6 +379,9 @@ export class PlatformTenantService {
         : null,
       product_audits: use.products
         ? `${use.products} produit${use.products > 1 ? 's' : ''} au catalogue`
+        : null,
+      orders: use.orders
+        ? `${use.orders} commande${use.orders > 1 ? 's' : ''}`
         : null,
     };
     return {
