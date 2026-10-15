@@ -1525,10 +1525,28 @@ describe('Tableaux de bord des relevés produits', () => {
       (await lead.api.get('/insights/products/overview').expect(200)).body
         .visits,
     ).toBe(4);
-    await agent.api.get('/insights/products/overview').expect(403);
+    // Agent : son tableau de bord, sur ses propres relevés.
+    expect(
+      (await agent.api.get('/insights/products/overview').expect(200)).body
+        .visits,
+    ).toBe(4);
+    const mySales = (
+      await agent.api.get('/insights/products/sales').expect(200)
+    ).body as Body;
+    expect(mySales).toEqual(
+      (await t.admin.api.get('/insights/products/sales').expect(200)).body,
+    );
 
     // Agent : la fiche d'un point de vente qu'il voit, avec les relevés de toute l'équipe.
     const other = await t.createUser('agent');
+    // … mais le tableau de bord d'un autre agent ne montre que ses relevés à lui : aucun.
+    expect(
+      (await other.api.get('/insights/products/overview').expect(200)).body
+        .visits,
+    ).toBe(0);
+    expect(
+      (await other.api.get('/insights/products/stockouts').expect(200)).body,
+    ).toEqual({ byProduct: [], outlets: [] });
     const seen = (
       await other.api.get(`/insights/products/outlets/${a.id}`).expect(200)
     ).body as Body[];
@@ -1538,6 +1556,49 @@ describe('Tableaux de bord des relevés produits', () => {
     ]);
     await other.api
       .get('/insights/products/outlets/00000000-0000-4000-8000-000000000000')
+      .expect(404);
+
+    // Historique des visites du point de vente : toute l'équipe, ou les siennes.
+    const history = (await other.api.get(`/outlets/${a.id}/visits`).expect(200))
+      .body as Body;
+    expect(history.total).toBeGreaterThan(0);
+    expect(history.items[0]).toMatchObject({
+      title: 'Relevés',
+      formName: 'Relevé',
+      agentId: agent.id,
+      status: 'accepted',
+    });
+    expect(history.items[0].readings).toBeGreaterThan(0);
+    expect(
+      (
+        await other.api
+          .get(`/outlets/${a.id}/visits`)
+          .query({ mine: true })
+          .expect(200)
+      ).body.total,
+    ).toBe(0);
+    const mine = (
+      await agent.api
+        .get(`/outlets/${a.id}/visits`)
+        .query({ mine: true, limit: 1 })
+        .expect(200)
+    ).body as Body;
+    expect(mine.total).toBe(history.total);
+    expect(mine.items).toHaveLength(1);
+
+    // Détail : champs du formulaire, réponses et relevé produit par produit.
+    const detail = (
+      await other.api.get(`/outlets/visits/${history.items[0].id}`).expect(200)
+    ).body as Body;
+    expect(detail).toMatchObject({ outletId: a.id, outletName: 'Boutique A' });
+    expect((detail.fields as Body[]).map((f) => f.key)).toContain('releve');
+    expect(detail.data).toHaveProperty('releve');
+    expect((detail.readings as Body[]).map((r) => r.name)).toEqual(
+      expect.arrayContaining(['Coca-Cola']),
+    );
+    expect(detail).not.toHaveProperty('typeId');
+    await other.api
+      .get('/outlets/visits/00000000-0000-4000-8000-000000000000')
       .expect(404);
   });
 });

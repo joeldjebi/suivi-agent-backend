@@ -138,6 +138,15 @@ export class UpdateOutletDto extends OutletInfoDto {
   priceListId?: string | null;
 }
 
+/** Historique des visites d'un point de vente. */
+export class OutletVisitsQuery extends PaginationQuery {
+  /** Les miennes seulement (agent) */
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true')
+  @IsBoolean()
+  mine?: boolean;
+}
+
 export class ChangeOutletStatusDto {
   @IsIn(STATUSES)
   status: OutletStatus;

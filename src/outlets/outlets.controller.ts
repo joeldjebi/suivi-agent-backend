@@ -42,6 +42,7 @@ import {
   OutletsMapQuery,
   UpdateOutletDto,
   VisitFormsDto,
+  OutletVisitsQuery,
 } from './outlets.dto';
 import { OutletsService } from './outlets.service';
 import { VisitsService } from './visits.service';
@@ -205,6 +206,25 @@ export class OutletsController {
     @Body() dto: CreateVisitDto,
   ) {
     return this.visits.visit(user, id, dto);
+  }
+
+  /** Historique des visites du point de vente ; `mine` : celles de l'agent. */
+  @Get(':id/visits')
+  visitHistory(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() q: OutletVisitsQuery,
+  ) {
+    return this.visits.history(user, id, q);
+  }
+
+  /** Détail d'une visite : réponses, photos et relevé par produit. */
+  @Get('visits/:submissionId')
+  visitDetail(
+    @CurrentUser() user: AuthUser,
+    @Param('submissionId', ParseUUIDPipe) submissionId: string,
+  ) {
+    return this.visits.detail(user, submissionId);
   }
 
   /** Rejet d'une visite libre : elle ne compte plus. */

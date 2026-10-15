@@ -9,7 +9,7 @@ import { photoIdsOf, validateData } from '../common/form-fields';
 import { MissionSubmission, MissionType, WorkDay } from '../entities';
 import { PhotosService } from '../photos/photos.service';
 import { ProductsService } from '../products/products.service';
-import type { CreateVisitDto } from './outlets.dto';
+import type { CreateVisitDto, OutletVisitsQuery } from './outlets.dto';
 import { OutletsService } from './outlets.service';
 import { assertPresence } from './visit-rules';
 
@@ -178,6 +178,93 @@ export class VisitsService {
       dto.outletComment,
     );
     return saved;
+  }
+
+  /**
+   * Historique des visites d'un point de vente (missions et visites libres), les plus récentes
+   * d'abord : toute l'équipe, ou celles de l'agent (`mine`).
+   */
+  async history(user: AuthUser, outletId: string, q: OutletVisitsQuery) {
+    await this.outlets.findForVisit(user, outletId);
+    const params = [outletId, q.mine ? user.id : null];
+    const where = `s.outlet_id = $1 AND ($2::uuid IS NULL OR s.agent_id = $2)`;
+    const [{ total }] = await this.db.manager.query<{ total: number }[]>(
+      `SELECT count(*)::int AS total FROM mission_submissions s WHERE ${where}`,
+      params,
+    );
+    const items = await this.db.manager.query<Record<string, unknown>[]>(
+      `SELECT s.id, s.mission_id AS "missionId", coalesce(m.title, t.name) AS title,
+              t.name AS "formName", s.agent_id AS "agentId",
+              trim(u.first_name || ' ' || u.last_name) AS agent,
+              s.submitted_at AS "submittedAt", s.status, s.rejected_reason AS "rejectedReason",
+              s.distance_m AS distance,
+              (SELECT count(*) FROM product_readings pr WHERE pr.submission_id = s.id)::int AS readings
+       FROM mission_submissions s
+       JOIN mission_types t ON t.id = s.type_id
+       LEFT JOIN missions m ON m.id = s.mission_id
+       JOIN users u ON u.id = s.agent_id
+       WHERE ${where}
+       ORDER BY s.submitted_at DESC
+       LIMIT $3 OFFSET $4`,
+      [...params, q.limit, (q.page - 1) * q.limit],
+    );
+    return { items, total, page: q.page, limit: q.limit };
+  }
+
+  /**
+   * Détail d'une visite d'un point de vente visible : réponses avec les champs du formulaire,
+   * photos (heure et position de la prise) et relevé produit par produit.
+   */
+  async detail(user: AuthUser, submissionId: string) {
+    const m = this.db.manager;
+    const [row] = await m.query<
+      {
+        id: string;
+        outletId: string | null;
+        outletName: string | null;
+        missionId: string | null;
+        title: string;
+        formName: string;
+        typeId: string;
+        agentId: string;
+        agent: string;
+        submittedAt: Date;
+        status: string;
+        rejectedReason: string | null;
+        distance: number | null;
+        data: Record<string, unknown>;
+      }[]
+    >(
+      `SELECT s.id, s.outlet_id AS "outletId", o.name AS "outletName",
+              s.mission_id AS "missionId", coalesce(mi.title, t.name) AS title,
+              t.name AS "formName", s.type_id AS "typeId", s.agent_id AS "agentId",
+              trim(u.first_name || ' ' || u.last_name) AS agent,
+              s.submitted_at AS "submittedAt", s.status, s.rejected_reason AS "rejectedReason",
+              s.distance_m AS distance, s.data
+       FROM mission_submissions s
+       JOIN mission_types t ON t.id = s.type_id
+       LEFT JOIN missions mi ON mi.id = s.mission_id
+       LEFT JOIN outlets o ON o.id = s.outlet_id
+       JOIN users u ON u.id = s.agent_id
+       WHERE s.id = $1`,
+      [submissionId],
+    );
+    if (!row?.outletId) throw notFound('Visite');
+    // Visible seulement si le point de vente l'est (zones de l'agent, équipe du chef).
+    await this.outlets.findForVisit(user, row.outletId);
+    const { typeId, ...visit } = row;
+    const type = await m.findOneByOrFail(MissionType, { id: typeId });
+    const photos = await this.photos.meta(photoIdsOf(type.fields, row.data));
+    const readings = await m.query<Record<string, unknown>[]>(
+      `SELECT pr.product_id AS "productId", p.name, p.format, p.own, p.unit, p.packagings,
+              pr.presence, pr.stock::float8 AS stock, pr.price::float8 AS price,
+              pr.sold::float8 AS sold, pr.losses::float8 AS losses, pr.ordered::float8 AS ordered
+       FROM product_readings pr JOIN products p ON p.id = pr.product_id
+       WHERE pr.submission_id = $1
+       ORDER BY p.own DESC, p.name`,
+      [submissionId],
+    );
+    return { ...visit, fields: type.fields, photos, readings };
   }
 
   /** Rejet d'une visite libre par un responsable : elle ne compte plus (retards, relevés). */

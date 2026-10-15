@@ -6,11 +6,14 @@ import { CurrentUser, RequiresFeature, Roles } from '../common/decorators';
 import { InsightsQuery } from './insights.dto';
 import { InsightsService } from './insights.service';
 
-/** Tableaux de bord des relevés produits : administrateur, et chef pour son équipe. */
+/**
+ * Tableaux de bord des relevés produits : l'administrateur pour toute la structure, le chef
+ * pour son équipe, l'agent pour ses propres relevés.
+ */
 @ApiTags('Analyses produits')
 @ApiBearerAuth()
 @RequiresFeature(Feature.ProductAudits)
-@Roles(Role.Admin, Role.TeamLead)
+@Roles(Role.Admin, Role.TeamLead, Role.Agent)
 @Controller('insights/products')
 export class InsightsController {
   constructor(private readonly insights: InsightsService) {}
