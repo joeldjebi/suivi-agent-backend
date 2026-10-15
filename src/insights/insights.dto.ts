@@ -36,3 +36,14 @@ export class InsightsQuery {
   @IsUUID()
   productId?: string;
 }
+
+/** Statistiques des formulaires : période (dates de la structure, incluses ; 30 derniers jours par défaut). */
+export class FormStatsQuery {
+  @IsOptional()
+  @IsDateString({ strict: true })
+  from?: string;
+
+  @IsOptional()
+  @IsDateString({ strict: true })
+  to?: string;
+}

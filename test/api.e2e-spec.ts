@@ -9096,3 +9096,161 @@ describe('Prise de commande', () => {
     ).toBeNull();
   });
 });
+
+describe('Statistiques des formulaires', () => {
+  it('chaque champ résumé selon son type, dans le périmètre de chacun', async () => {
+    const t = await newTenant(app);
+    const zone = await t.createZone('Plateau', PLATEAU);
+    const agent = await t.createUser('agent');
+    const other = await t.createUser('agent');
+    const type = (
+      await t.admin.api
+        .post('/mission-types', {
+          name: 'Prospection',
+          fields: [
+            { key: 'nom', label: 'Commerce', type: 'text', required: true },
+            {
+              key: 'montant',
+              label: 'Montant',
+              type: 'number',
+              required: false,
+            },
+            {
+              key: 'conforme',
+              label: 'Conforme',
+              type: 'boolean',
+              required: false,
+            },
+            {
+              key: 'interet',
+              label: 'Intérêt',
+              type: 'select',
+              required: false,
+              options: ['Oui', 'À relancer', 'Non'],
+            },
+            {
+              key: 'vitrine',
+              label: 'Vitrine',
+              type: 'photo',
+              required: false,
+            },
+          ],
+        })
+        .expect(201)
+    ).body as { id: string };
+    const mission = (
+      await t.admin.api
+        .post('/missions', {
+          typeId: type.id,
+          title: 'Prospection Plateau',
+          zoneIds: [zone.id],
+          progressMethod: 'count',
+          targetValue: 10,
+        })
+        .expect(201)
+    ).body as { id: string };
+    for (const a of [agent, other]) {
+      await a.api.post('/zone-requests', { zoneId: zone.id }).expect(201);
+      await a.api.post('/days/start').expect(200);
+    }
+    const submit = (a: typeof agent, data: object) =>
+      a.api
+        .post(`/missions/${mission.id}/submissions`, {
+          clientId: randomUUID(),
+          data,
+          submittedAt: new Date().toISOString(),
+        })
+        .expect(201);
+    await submit(agent, {
+      nom: 'A',
+      montant: 10000,
+      conforme: true,
+      interet: 'Oui',
+    });
+    await submit(agent, {
+      nom: 'B',
+      montant: 30000,
+      conforme: false,
+      interet: 'Oui',
+    });
+    await submit(agent, { nom: 'C', conforme: true, interet: 'À relancer' });
+    await submit(other, { nom: 'D', montant: 99999, interet: 'Non' });
+
+    // Agent : ses formulaires seulement.
+    const list = (await agent.api.get('/form-stats').expect(200)).body as Body;
+    expect(list.forms).toEqual([
+      expect.objectContaining({
+        id: type.id,
+        name: 'Prospection',
+        submissions: 3,
+      }),
+    ]);
+    const stats = (await agent.api.get(`/form-stats/${type.id}`).expect(200))
+      .body as Body;
+    expect(stats.submissions).toBe(3);
+    const field = (key: string) =>
+      (stats.fields as Body[]).find((f) => f.key === key)!.stats;
+    expect(field('montant')).toEqual({
+      kind: 'number',
+      answered: 2,
+      sum: 40000,
+      avg: 20000,
+      min: 10000,
+      max: 30000,
+    });
+    expect(field('conforme')).toEqual({
+      kind: 'boolean',
+      answered: 3,
+      yes: 2,
+      no: 1,
+      yesRate: 67,
+    });
+    expect(field('interet')).toEqual({
+      kind: 'select',
+      answered: 3,
+      options: [
+        { value: 'Oui', count: 2 },
+        { value: 'À relancer', count: 1 },
+        { value: 'Non', count: 0 },
+      ],
+    });
+    expect(field('vitrine')).toEqual({ kind: 'photo', answered: 0 });
+    expect(field('nom')).toEqual({ kind: 'text', answered: 3 });
+
+    // Administrateur : toute la structure.
+    const all = (await t.admin.api.get(`/form-stats/${type.id}`).expect(200))
+      .body as Body;
+    expect(all.submissions).toBe(4);
+
+    // Formulaire rejeté : il ne compte plus.
+    const [first] = (
+      await t.admin.api.get(`/missions/${mission.id}/submissions`).expect(200)
+    ).body as Body[];
+    await t.admin.api
+      .post(`/submissions/${first.id}/reject`, { reason: 'Doublon' })
+      .expect(200);
+    expect(
+      (
+        (await t.admin.api.get(`/form-stats/${type.id}`).expect(200))
+          .body as Body
+      ).submissions,
+    ).toBe(3);
+
+    // Période : rien avant aujourd'hui ; période inversée refusée.
+    expect(
+      (
+        (
+          await agent.api
+            .get('/form-stats')
+            .query({ from: '2020-01-01', to: '2020-01-31' })
+            .expect(200)
+        ).body as Body
+      ).forms,
+    ).toEqual([]);
+    await agent.api
+      .get('/form-stats')
+      .query({ from: '2026-12-31', to: '2026-01-01' })
+      .expect(400);
+    await agent.api.get(`/form-stats/${randomUUID()}`).expect(404);
+  });
+});
