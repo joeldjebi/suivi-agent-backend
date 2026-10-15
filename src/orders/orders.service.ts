@@ -446,6 +446,28 @@ export class OrdersService {
   }
 
   /** Chiffres de la période : nombre et montant par statut (hors annulées pour le total). */
+  /**
+   * Ce que la structure a vendu aux points de vente sur la période, produit par produit :
+   * commandes livrées ou payées (une commande prise n'est pas encore une vente), dans le
+   * périmètre de l'utilisateur. Les plus commandés d'abord.
+   */
+  async products(user: AuthUser, q: OrdersSummaryQuery) {
+    const { where, params } = await this.filters(user, q);
+    const products = await this.db.manager.query<Record<string, unknown>[]>(
+      `SELECT l.product_id AS "productId", p.name, p.format, p.unit, p.packagings,
+              sum(l.quantity)::float8 AS quantity, sum(l.amount)::float8 AS amount,
+              count(DISTINCT o.outlet_id)::int AS outlets
+       ${ORDER_FROM}
+       JOIN order_lines l ON l.order_id = o.id
+       JOIN products p ON p.id = l.product_id
+       WHERE ${where} AND o.status IN ('delivered', 'paid')
+       GROUP BY l.product_id, p.name, p.format, p.unit, p.packagings
+       ORDER BY quantity DESC, p.name`,
+      params,
+    );
+    return { currency: await this.currency(), products };
+  }
+
   async summary(user: AuthUser, q: OrdersSummaryQuery) {
     const { where, params } = await this.filters(user, q);
     const rows = await this.db.manager.query<

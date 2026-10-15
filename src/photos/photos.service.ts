@@ -71,19 +71,30 @@ export class PhotosService {
 
   /**
    * L'image : l'agent voit les siennes, le chef celles de ses agents, l'administrateur toutes.
-   * Photo d'une fiche de point de vente : toute l'équipe qui voit le point de vente.
+   * Photo d'une fiche de point de vente, ou prise pendant la visite d'un point de vente :
+   * toute l'équipe qui voit le point de vente (l'identifiant n'est donné que par la fiche ou
+   * par le détail de la visite, qui vérifient cet accès).
    */
   async file(user: AuthUser, id: string) {
     const [row] = await this.db.manager.query<
-      { agentId: string; outletId: string | null; data: Buffer; mime: string }[]
+      {
+        agentId: string;
+        outletId: string | null;
+        visitOutletId: string | null;
+        data: Buffer;
+        mime: string;
+      }[]
     >(
-      `SELECT agent_id AS "agentId", outlet_id AS "outletId", data, mime
-       FROM submission_photos WHERE id = $1`,
+      `SELECT p.agent_id AS "agentId", p.outlet_id AS "outletId",
+              s.outlet_id AS "visitOutletId", p.data, p.mime
+       FROM submission_photos p
+       LEFT JOIN mission_submissions s ON s.id = p.submission_id
+       WHERE p.id = $1`,
       [id],
     );
     if (!row) throw notFound('Photo');
-    if (row.outletId) {
-      // Photo de fiche : visible par la structure (RLS) qui a accès aux points de vente.
+    if (row.outletId || row.visitOutletId) {
+      // Fiche ou visite d'un point de vente : visible par la structure (RLS).
     } else if (user.role === Role.Agent) {
       if (row.agentId !== user.id) throw notFound('Photo');
     } else if (user.role === Role.TeamLead) {

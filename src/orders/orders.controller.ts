@@ -106,6 +106,12 @@ export class OrdersController {
     return this.orders.summary(user, q);
   }
 
+  /** Produits vendus (commandes livrées ou payées) de la période, les plus commandés d'abord. */
+  @Get('products')
+  products(@CurrentUser() user: AuthUser, @Query() q: OrdersSummaryQuery) {
+    return this.orders.products(user, q);
+  }
+
   @Get(':id')
   get(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.orders.get(user, id);

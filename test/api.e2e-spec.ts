@@ -1813,6 +1813,12 @@ describe('Modules indépendants : points de vente sans missions', () => {
               required: false,
               products: { scope: 'all', measures: ['presence', 'stock'] },
             },
+            {
+              key: 'rayon',
+              label: 'Photo du rayon',
+              type: 'photo',
+              required: false,
+            },
           ],
         })
         .expect(201)
@@ -1930,6 +1936,34 @@ describe('Modules indépendants : points de vente sans missions', () => {
       (await t.admin.api.get(`/outlets/${outlet.id}`).expect(200)).body
         .lastVisitAt,
     ).toBeNull();
+
+    // Photo prise pendant la visite : visible par l'équipe qui voit le point de vente,
+    // depuis le détail de la visite.
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    const photo = (
+      await request(app.getHttpServer())
+        .post('/api/photos')
+        .set('Authorization', `Bearer ${agent.api.token}`)
+        .attach('file', png, 'rayon.png')
+        .field('clientId', randomUUID())
+        .field('takenAt', new Date().toISOString())
+        .expect(201)
+    ).body as { id: string };
+    const withPhoto = (
+      await visit(outlet, {
+        data: { remarque: 'Rayon', rayon: photo.id },
+      }).expect(201)
+    ).body;
+    const colleague = await t.createUser('agent');
+    const seen = (
+      await colleague.api.get(`/outlets/visits/${withPhoto.id}`).expect(200)
+    ).body;
+    expect(seen.data.rayon).toBe(photo.id);
+    expect(seen.photos).toHaveProperty(photo.id);
+    await colleague.api.get(`/photos/${photo.id}`).expect(200);
 
     // Formule de test retirée : les autres tests voient le catalogue d'origine.
     await owner.query(
@@ -9024,6 +9058,17 @@ describe('Prise de commande', () => {
       toCollect: 0,
     });
     expect(summary.byStatus.cancelled).toEqual({ count: 1, amount: 7800 });
+
+    // Produits vendus : commandes livrées ou payées seulement (l'annulée ne compte pas).
+    const sold = (await agent.api.get('/orders/products').expect(200))
+      .body as Body;
+    expect(
+      (sold.products as Body[]).map((p) => [p.name, p.quantity, p.amount]),
+    ).toEqual([['Coca-Cola', 30, 9000]]);
+    expect(
+      ((await other.api.get('/orders/products').expect(200)).body as Body)
+        .products,
+    ).toEqual([]);
 
     // Un autre agent : pas les commandes de son collègue… sauf sur la fiche d'un point de vente.
     expect(
