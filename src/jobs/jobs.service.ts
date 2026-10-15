@@ -12,6 +12,7 @@ import { workDate } from '../common/time.util';
 import { TenantSettings, ZoneRequest } from '../entities';
 import { DaysService } from '../days/days.service';
 import { MissionsService } from '../missions/missions.service';
+import { OutletsService } from '../outlets/outlets.service';
 import { PositionsService } from '../positions/positions.service';
 import { ZoneRequestsService } from '../zone-requests/zone-requests.service';
 
@@ -35,6 +36,7 @@ export class JobsService {
     private readonly zoneExits: ZoneExitsService,
     private readonly alerts: AlertsService,
     private readonly reports: ReportsService,
+    private readonly outlets: OutletsService,
   ) {}
 
   /** Toutes les minutes : demandes en attente puis remise à zéro quotidienne. */
@@ -82,6 +84,14 @@ export class JobsService {
       );
       if (features.includes(Feature.Payroll))
         await this.payrollService.prepareDraft();
+    });
+  }
+
+  /** Points de vente en retard de visite : avis du matin aux responsables (une fois par jour). */
+  @Cron(CronExpression.EVERY_30_MINUTES)
+  async outletsOverdue(now = new Date()) {
+    await this.forEachTenant('outlets', async (settings) => {
+      await this.outlets.notifyOverdue(settings, now);
     });
   }
 

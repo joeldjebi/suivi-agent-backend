@@ -206,6 +206,13 @@ export class UpdateSettingsDto {
   @Max(1000)
   visitRadiusMeters?: number;
 
+  /** Fréquence de visite des points de vente par défaut, en jours (0 = pas de suivi) */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(365)
+  outletVisitFrequencyDays?: number;
+
   /** Heure du bilan de fin de journée (HH:mm) ; null : pas d'envoi */
   @IsOptional()
   @ValidateIf((_, v) => v !== null)

@@ -8,6 +8,7 @@ import {
   IsLatitude,
   IsLongitude,
   IsNotEmpty,
+  IsInt,
   IsNumber,
   IsObject,
   IsOptional,
@@ -60,6 +61,13 @@ class OutletInfoDto {
   @IsOptional()
   @IsObject()
   data?: Record<string, unknown>;
+
+  /** Visiter tous les N jours ; null : fréquence de la structure */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(365)
+  visitFrequencyDays?: number | null;
 }
 
 export class CreateOutletDto extends OutletInfoDto {
@@ -168,6 +176,12 @@ export class ListOutletsQuery extends PaginationQuery {
   @MaxLength(60)
   category?: string;
 
+  /** En retard de visite (fréquence dépassée) */
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true')
+  @IsBoolean()
+  overdue?: boolean;
+
   /** Sans position (importés, à localiser) */
   @IsOptional()
   @Transform(({ value }) => value === true || value === 'true')
@@ -192,6 +206,30 @@ export class ListOutletsQuery extends PaginationQuery {
   @Min(10)
   @Max(50_000)
   radius?: number;
+}
+
+export class OutletRouteQuery {
+  /** Point de départ : la position de l'agent */
+  @Type(() => Number)
+  @IsLatitude()
+  lat: number;
+
+  @Type(() => Number)
+  @IsLongitude()
+  lng: number;
+
+  /** Mission de visites : ses points de vente restant à visiter ; sinon ceux en retard */
+  @IsOptional()
+  @IsUUID()
+  missionId?: string;
+
+  /** Nombre d'étapes, au plus */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(2)
+  @Max(25)
+  max?: number;
 }
 
 export class OutletsMapQuery {

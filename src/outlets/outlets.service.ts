@@ -1,5 +1,6 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import {
+  Feature,
   FieldType,
   type MissionField,
   OUTLET_CATEGORIES,
@@ -19,7 +20,11 @@ import {
 import { DbService } from '../common/db.service';
 import { assertFields, photoIdsOf, validateData } from '../common/form-fields';
 import { requirePhone } from '../common/phone';
-import { AuditLog } from '../entities';
+import { AuditLog, TenantSettings } from '../entities';
+import { NotificationsService } from '../common/notifications.service';
+import { localDate } from '../common/time.util';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
+import { haversine, optimizeRoute } from './route';
 import type { ExportFile } from '../exports/exports.service';
 import { type Cell, type Sheet, toCsv, toXlsx } from '../exports/sheet';
 import type {
@@ -27,6 +32,7 @@ import type {
   CreateOutletDto,
   ExportOutletsQuery,
   ListOutletsQuery,
+  OutletRouteQuery,
   OutletsMapQuery,
   UpdateOutletDto,
 } from './outlets.dto';
@@ -56,6 +62,16 @@ export interface OutletView {
   createdBy: { id: string; name: string } | null;
   createdAt: Date;
   updatedAt: Date;
+  /** Fréquence propre au point de vente (jours) ; null : celle de la structure */
+  visitFrequencyDays: number | null;
+  /** Fréquence appliquée, en jours (0 : pas de suivi) */
+  frequencyDays: number;
+  lastVisitAt: Date | null;
+  /** Visite attendue au plus tard (null : pas de suivi) */
+  dueAt: Date | null;
+  overdue: boolean;
+  /** Jours depuis la dernière visite (null : jamais visité) */
+  daysSinceVisit: number | null;
   /** Distance en mètres (recherche autour d'un point) */
   distance?: number;
 }
@@ -80,8 +96,20 @@ interface Row {
   createdByName: string | null;
   createdAt: Date;
   updatedAt: Date;
+  visitFrequencyDays: number | null;
+  frequencyDays: number;
+  lastVisitAt: Date | null;
+  overdue: boolean;
   distance?: number | null;
 }
+
+/**
+ * En retard de visite : la fréquence (celle du point de vente, sinon de la structure) est
+ * dépassée depuis la dernière visite acceptée, ou depuis l'ajout s'il n'a jamais été visité.
+ * Un point de vente fermé n'est plus suivi.
+ */
+const OVERDUE = `(freq.days > 0 AND o.status <> 'closed'
+  AND coalesce(lv.at, o.created_at) < now() - make_interval(days => freq.days))`;
 
 /** Colonnes communes ; la zone est déduite de la position (elle suit les tracés). */
 const SELECT = `
@@ -91,7 +119,9 @@ const SELECT = `
   zz.id AS "zoneId", zz.name AS "zoneName",
   o.created_by AS "createdById",
   nullif(trim(coalesce(u.first_name, '') || ' ' || coalesce(u.last_name, '')), '') AS "createdByName",
-  o.created_at AS "createdAt", o.updated_at AS "updatedAt"`;
+  o.created_at AS "createdAt", o.updated_at AS "updatedAt",
+  o.visit_frequency_days AS "visitFrequencyDays", freq.days AS "frequencyDays",
+  lv.at AS "lastVisitAt", ${OVERDUE} AS overdue`;
 const FROM = `
   FROM outlets o
   LEFT JOIN LATERAL (
@@ -99,7 +129,15 @@ const FROM = `
     WHERE z.is_active AND o.location IS NOT NULL AND ST_Covers(z.area, o.location)
     ORDER BY z.name LIMIT 1
   ) zz ON true
-  LEFT JOIN users u ON u.id = o.created_by`;
+  LEFT JOIN users u ON u.id = o.created_by
+  LEFT JOIN LATERAL (
+    SELECT max(ms.submitted_at) AS at FROM mission_submissions ms
+    WHERE ms.outlet_id = o.id AND ms.status = 'accepted'
+  ) lv ON true
+  CROSS JOIN LATERAL (
+    SELECT coalesce(o.visit_frequency_days,
+                    (SELECT ts.outlet_visit_frequency_days FROM tenant_settings ts WHERE ts.tenant_id = o.tenant_id)) AS days
+  ) freq`;
 
 /** Périmètre visible : `zones` null = tout ; sinon ces zones, ses fiches et celles de ses agents. */
 interface Scope {
@@ -126,6 +164,8 @@ export class OutletsService {
   constructor(
     private readonly db: DbService,
     private readonly access: AccessService,
+    private readonly subscriptions: SubscriptionsService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // ---------------------------------------------------------------- fiche
@@ -199,6 +239,7 @@ export class OutletsService {
     if (q.zoneId) where.push(`zz.id = ${p(q.zoneId)}`);
     if (q.category) where.push(`o.category = ${p(q.category)}`);
     if (q.unlocated) where.push(`o.location IS NULL`);
+    if (q.overdue) where.push(OVERDUE);
     let distance = '';
     if (near) {
       const point = `ST_SetSRID(ST_MakePoint(${p(q.lng)}, ${p(q.lat)}), 4326)`;
@@ -210,9 +251,9 @@ export class OutletsService {
     }
     // Compteurs par statut : avec tous les filtres sauf le statut lui-même.
     const counts = await this.db.manager.query<
-      { status: OutletStatus; count: number }[]
+      { status: OutletStatus; count: number; overdue: number }[]
     >(
-      `SELECT o.status, count(*)::int AS count ${FROM}
+      `SELECT o.status, count(*)::int AS count, count(*) FILTER (WHERE ${OVERDUE})::int AS overdue ${FROM}
        WHERE ${where.join(' AND ')} GROUP BY o.status`,
       params,
     );
@@ -239,6 +280,8 @@ export class OutletsService {
           counts.find((c) => c.status === s)?.count ?? 0,
         ]),
       ) as Record<OutletStatus, number>,
+      /** En retard de visite (tous statuts, filtres compris) */
+      overdue: counts.reduce((sum, c) => sum + c.overdue, 0),
     };
   }
 
@@ -262,7 +305,8 @@ export class OutletsService {
         lng: number;
       }[]
     >(
-      `SELECT o.id, o.name, o.status, o.category, ST_Y(o.location) AS lat, ST_X(o.location) AS lng
+      `SELECT o.id, o.name, o.status, o.category, ST_Y(o.location) AS lat, ST_X(o.location) AS lng,
+              ${OVERDUE} AS overdue
        ${FROM} WHERE ${where.join(' AND ')} ORDER BY o.name LIMIT 20000`,
       params,
     );
@@ -404,9 +448,9 @@ export class OutletsService {
     const status = dto.status ?? OutletStatus.New;
     const [{ id }] = await m.query<{ id: string }[]>(
       `INSERT INTO outlets (tenant_id, name, category, manager_name, phone, landmark, location,
-                            accuracy, status, photo_id, data, created_by, client_id)
+                            accuracy, status, photo_id, data, created_by, client_id, visit_frequency_days)
        VALUES ($1, $2, $3, $4, $5, $6, ST_SetSRID(ST_MakePoint($7, $8), 4326), $9, $10, $11,
-               $12::jsonb, $13, $14)
+               $12::jsonb, $13, $14, $15)
        RETURNING id`,
       [
         this.db.tenantId,
@@ -423,6 +467,7 @@ export class OutletsService {
         JSON.stringify(data),
         user.id,
         dto.clientId ?? null,
+        user.role === Role.Agent ? null : (dto.visitFrequencyDays ?? null),
       ],
     );
     await this.history(id, null, status, dto.comment || null, user.id);
@@ -445,6 +490,11 @@ export class OutletsService {
     if (dto.phone !== undefined)
       set('phone', dto.phone ? requirePhone(dto.phone) : null);
     if (dto.landmark !== undefined) set('landmark', dto.landmark || null);
+    if (dto.visitFrequencyDays !== undefined) {
+      if (user.role === Role.Agent)
+        throw forbidden('Seul un responsable règle la fréquence de visite');
+      set('visit_frequency_days', dto.visitFrequencyDays);
+    }
 
     const fields = await this.fields(user);
     const photos: string[] = [];
@@ -570,6 +620,150 @@ export class OutletsService {
       user.id,
     );
     return this.get(user, intoId);
+  }
+
+  // ---------------------------------------------------------------- tournées et retards
+
+  /**
+   * Tournée optimisée depuis la position de l'agent : les points de vente d'une mission de
+   * visites qui restent à visiter, sinon ceux en retard de visite. Les plus proches sont
+   * retenus (`max` étapes) puis ordonnés pour raccourcir le trajet (à vol d'oiseau).
+   */
+  async route(user: AuthUser, q: OutletRouteQuery) {
+    const scope = await this.scope(user);
+    const params: unknown[] = [];
+    const p = (v: unknown) => {
+      params.push(v);
+      return `$${params.length}`;
+    };
+    const where = [
+      this.scopeSql(scope, p),
+      'o.location IS NOT NULL',
+      `o.status <> 'closed'`,
+    ];
+    if (q.missionId) {
+      const [mission] = await this.db.manager.query<
+        { visitMode: string | null }[]
+      >(
+        `SELECT visit_mode AS "visitMode" FROM missions WHERE id = $1 AND progress_method = 'outlets'`,
+        [q.missionId],
+      );
+      if (!mission) throw notFound('Mission de visites');
+      const m = p(q.missionId);
+      where.push(
+        mission.visitMode === 'list'
+          ? `EXISTS (SELECT 1 FROM mission_outlets mo WHERE mo.mission_id = ${m} AND mo.outlet_id = o.id)`
+          : `EXISTS (SELECT 1 FROM mission_zones mz JOIN zones z ON z.id = mz.zone_id AND z.is_active
+                     WHERE mz.mission_id = ${m} AND ST_Covers(z.area, o.location))`,
+        `NOT EXISTS (SELECT 1 FROM mission_submissions s WHERE s.mission_id = ${m}
+                     AND s.outlet_id = o.id AND s.status = 'accepted')`,
+      );
+    } else {
+      where.push(OVERDUE);
+    }
+    const rows = await this.db.manager.query<Row[]>(
+      `SELECT ${SELECT} ${FROM} WHERE ${where.join(' AND ')} LIMIT 2000`,
+      params,
+    );
+    const start = { lat: q.lat, lng: q.lng };
+    const max = q.max ?? 12;
+    const nearest = rows
+      .map(view)
+      .map((o) => ({ ...o, lat: o.lat!, lng: o.lng! }))
+      .sort((a, b) => haversine(start, a) - haversine(start, b))
+      .slice(0, max);
+    const ordered = optimizeRoute(start, nearest);
+    let cumulative = 0;
+    let from = start;
+    const stops = ordered.map((o, i) => {
+      const leg = Math.round(haversine(from, o));
+      cumulative += leg;
+      from = o;
+      return {
+        ...o,
+        order: i + 1,
+        legMeters: leg,
+        cumulativeMeters: cumulative,
+      };
+    });
+    return {
+      source: q.missionId ? 'mission' : 'overdue',
+      candidates: rows.length,
+      stops,
+      totalMeters: cumulative,
+      // À pied (4,5 km/h), le trajet réel étant environ 30 % plus long qu'à vol d'oiseau.
+      travelMinutes: Math.round((cumulative * 1.3) / 75),
+      visitMinutes: stops.length * 10,
+    };
+  }
+
+  /**
+   * Chaque matin (à partir de 8 h, une fois par jour) : les responsables sont prévenus des
+   * points de vente en retard de visite de leur périmètre.
+   */
+  async notifyOverdue(settings: TenantSettings, now = new Date()) {
+    const { features } = await this.subscriptions.summary(settings.tenantId);
+    if (!features.includes(Feature.PointsOfSale)) return 0;
+    const today = localDate(now, settings.timezone);
+    const hour = Number(
+      new Intl.DateTimeFormat('en-GB', {
+        hour: 'numeric',
+        hourCycle: 'h23',
+        timeZone: settings.timezone,
+      })
+        .formatToParts(now)
+        .find((p) => p.type === 'hour')?.value ?? 0,
+    );
+    const [{ last }] = await this.db.manager.query<{ last: string | null }[]>(
+      `SELECT to_char(outlets_overdue_notified_on, 'YYYY-MM-DD') AS last FROM tenant_settings WHERE tenant_id = $1`,
+      [settings.tenantId],
+    );
+    if (hour < 8 || last === today) return 0;
+    await this.db.manager.query(
+      `UPDATE tenant_settings SET outlets_overdue_notified_on = $2 WHERE tenant_id = $1`,
+      [settings.tenantId, today],
+    );
+    if (!settings.outletVisitFrequencyDays && !(await this.hasOwnFrequencies()))
+      return 0;
+    const recipients = await this.db.manager.query<
+      { id: string; role: Role }[]
+    >(
+      `SELECT id, role FROM users WHERE is_active AND role IN ('admin', 'team_lead')`,
+    );
+    let sent = 0;
+    for (const r of recipients) {
+      const user = {
+        id: r.id,
+        role: r.role,
+        tenantId: settings.tenantId,
+      } as AuthUser;
+      const scope = await this.scope(user);
+      const params: unknown[] = [];
+      const p = (v: unknown) => {
+        params.push(v);
+        return `$${params.length}`;
+      };
+      const [{ count }] = await this.db.manager.query<{ count: number }[]>(
+        `SELECT count(*)::int AS count ${FROM} WHERE ${this.scopeSql(scope, p)} AND ${OVERDUE}`,
+        params,
+      );
+      if (!count) continue;
+      await this.notifications.notify([r.id], {
+        type: 'outlets.overdue',
+        title: 'Points de vente à visiter',
+        body: `${count} point${count > 1 ? 's' : ''} de vente ${count > 1 ? 'ne sont pas visités' : 'n’est pas visité'} depuis plus longtemps que prévu.`,
+        data: { count },
+      });
+      sent++;
+    }
+    return sent;
+  }
+
+  private async hasOwnFrequencies() {
+    const [row] = await this.db.manager.query<unknown[]>(
+      `SELECT 1 FROM outlets WHERE visit_frequency_days IS NOT NULL LIMIT 1`,
+    );
+    return !!row;
   }
 
   // ---------------------------------------------------------------- import / export
@@ -704,11 +898,12 @@ export class OutletsService {
     if (q.zoneId) where.push(`zz.id = ${p(q.zoneId)}`);
     const tz = p(settings.timezone);
     const rows = await this.db.manager.query<
-      (Row & { created: string; changed: string })[]
+      (Row & { created: string; changed: string; visited: string | null })[]
     >(
       `SELECT ${SELECT},
               to_char(o.created_at AT TIME ZONE ${tz}, 'YYYY-MM-DD HH24:MI') AS created,
-              to_char(o.status_changed_at AT TIME ZONE ${tz}, 'YYYY-MM-DD HH24:MI') AS changed
+              to_char(o.status_changed_at AT TIME ZONE ${tz}, 'YYYY-MM-DD HH24:MI') AS changed,
+              to_char(lv.at AT TIME ZONE ${tz}, 'YYYY-MM-DD HH24:MI') AS visited
        ${FROM} WHERE ${where.join(' AND ')} ORDER BY o.name LIMIT 50001`,
       params,
     );
@@ -736,6 +931,9 @@ export class OutletsService {
         { header: 'Ajouté par', kind: 'text', width: 20 },
         { header: 'Ajouté le', kind: 'datetime', width: 17 },
         { header: 'Statut depuis le', kind: 'datetime', width: 17 },
+        { header: 'Dernière visite', kind: 'datetime', width: 17 },
+        { header: 'Fréquence (jours)', kind: 'number', width: 10 },
+        { header: 'En retard', kind: 'text', width: 10 },
       ],
       rows: rows.map((r): Cell[] => [
         r.name,
@@ -751,6 +949,9 @@ export class OutletsService {
         r.createdByName,
         r.created,
         r.changed,
+        r.visited,
+        r.frequencyDays || null,
+        r.overdue ? 'Oui' : 'Non',
       ]),
     };
     await this.db.manager.insert(AuditLog, {
@@ -910,6 +1111,8 @@ export class OutletsService {
   }
 }
 
+const DAY_MS = 86_400_000;
+
 function view(r: Row): OutletView {
   return {
     id: r.id,
@@ -931,6 +1134,22 @@ function view(r: Row): OutletView {
       : null,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
+    visitFrequencyDays: r.visitFrequencyDays,
+    frequencyDays: r.frequencyDays,
+    lastVisitAt: r.lastVisitAt,
+    dueAt: r.frequencyDays
+      ? new Date(
+          new Date(r.lastVisitAt ?? r.createdAt).getTime() +
+            r.frequencyDays * DAY_MS,
+        )
+      : null,
+    overdue: r.overdue,
+    daysSinceVisit: r.lastVisitAt
+      ? Math.max(
+          0,
+          Math.floor((Date.now() - new Date(r.lastVisitAt).getTime()) / DAY_MS),
+        )
+      : null,
     ...(r.distance != null ? { distance: Math.round(Number(r.distance)) } : {}),
   };
 }

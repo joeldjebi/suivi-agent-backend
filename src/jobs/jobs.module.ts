@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { OutletsModule } from '../outlets/outlets.module';
 import { PayrollModule } from '../payroll/payroll.module';
 import { DaysModule } from '../days/days.module';
 import { MissionsModule } from '../missions/missions.module';
@@ -11,6 +12,7 @@ import { JobsService } from './jobs.service';
   imports: [
     DaysModule,
     MissionsModule,
+    OutletsModule,
     PayrollModule,
     PositionsModule,
     ReportsModule,

@@ -1529,6 +1529,168 @@ describe('Tableaux de bord des relevés produits', () => {
   });
 });
 
+describe('Fréquence de visite, retards et tournées', () => {
+  /** Point à ~`m` mètres au nord de `p`. */
+  const north = (p: { lat: number; lng: number }, m: number) => ({
+    lat: p.lat + m / 111_320,
+    lng: p.lng,
+  });
+
+  it('retard selon la fréquence (structure ou point de vente), tournée optimisée, avis du matin', async () => {
+    const t = await newTenant(app);
+    const plateau = await t.createZone('Plateau', PLATEAU);
+    const agent = await t.createUser('agent');
+    const outlet = async (
+      name: string,
+      at: { lat: number; lng: number },
+      daysAgo = 0,
+    ) => {
+      const o = (
+        await t.admin.api
+          .post('/outlets', { name, ...at, force: true })
+          .expect(201)
+      ).body as Body;
+      if (daysAgo)
+        await owner.query(
+          `UPDATE outlets SET created_at = now() - make_interval(days => $2) WHERE id = $1`,
+          [o.id, daysAgo],
+        );
+      return o;
+    };
+    // Ajoutés il y a 40 jours, jamais visités : en retard (30 jours par défaut).
+    const far = await outlet('Loin', north(IN_PLATEAU, 900), 40);
+    const near = await outlet('Près', north(IN_PLATEAU, 300), 40);
+    const mid = await outlet('Milieu', north(IN_PLATEAU, 600), 40);
+    // Récent : pas encore dû.
+    const fresh = await outlet('Récent', north(IN_PLATEAU, 100));
+    // Fréquence propre de 60 jours : pas encore en retard.
+    const slow = await outlet('Grossiste', north(IN_PLATEAU, 450), 40);
+    await agent.api
+      .patch(`/outlets/${slow.id}`, { visitFrequencyDays: 60 })
+      .expect(403);
+    const updated = (
+      await t.admin.api
+        .patch(`/outlets/${slow.id}`, { visitFrequencyDays: 60 })
+        .expect(200)
+    ).body;
+    expect(updated).toMatchObject({
+      visitFrequencyDays: 60,
+      frequencyDays: 60,
+      overdue: false,
+      lastVisitAt: null,
+    });
+
+    const detail = (await t.admin.api.get(`/outlets/${near.id}`).expect(200))
+      .body;
+    expect(detail).toMatchObject({
+      frequencyDays: 30,
+      overdue: true,
+      daysSinceVisit: null,
+    });
+    expect(new Date(detail.dueAt).getTime()).toBeLessThan(Date.now());
+    expect(
+      (await t.admin.api.get(`/outlets/${fresh.id}`).expect(200)).body.overdue,
+    ).toBe(false);
+
+    const overdue = (await t.admin.api.get('/outlets?overdue=true').expect(200))
+      .body;
+    expect((overdue.items as Body[]).map((o) => o.name).sort()).toEqual([
+      'Loin',
+      'Milieu',
+      'Près',
+    ]);
+    expect((await t.admin.api.get('/outlets').expect(200)).body.overdue).toBe(
+      3,
+    );
+
+    // Une visite récente remet le compteur à zéro.
+    const type = (
+      await t.admin.api
+        .post('/mission-types', { name: 'Visite', fields: [] })
+        .expect(201)
+    ).body as { id: string };
+    const mission = (
+      await t.admin.api
+        .post('/missions', {
+          typeId: type.id,
+          title: 'Tournée',
+          zoneIds: [plateau.id],
+          progressMethod: 'outlets',
+          visitMode: 'list',
+          outletIds: [far.id, near.id, mid.id, fresh.id],
+        })
+        .expect(201)
+    ).body as Body;
+    await agent.api.post('/zone-requests', { zoneId: plateau.id }).expect(201);
+    await agent.api.post('/days/start').expect(200);
+    await agent.api
+      .post(`/missions/${mission.id}/submissions`, {
+        clientId: randomUUID(),
+        data: {},
+        ...north(IN_PLATEAU, 600),
+        outletId: mid.id,
+        submittedAt: new Date(Date.now() + 1000).toISOString(),
+      })
+      .expect(201);
+    const visited = (await t.admin.api.get(`/outlets/${mid.id}`).expect(200))
+      .body;
+    expect(visited).toMatchObject({ overdue: false, daysSinceVisit: 0 });
+
+    // Tournée des retards depuis la position de l'agent : du plus proche au plus loin.
+    const route = (
+      await agent.api
+        .get(`/outlets/route?lat=${IN_PLATEAU.lat}&lng=${IN_PLATEAU.lng}`)
+        .expect(200)
+    ).body;
+    expect(route.source).toBe('overdue');
+    expect((route.stops as Body[]).map((s) => s.name)).toEqual([
+      'Près',
+      'Loin',
+    ]);
+    expect(route.stops[0]).toMatchObject({ order: 1 });
+    expect(Math.abs(route.totalMeters - 900)).toBeLessThan(10);
+    expect(route.visitMinutes).toBe(20);
+    // Tournée d'une mission : ce qui reste à visiter (le « Milieu » est fait).
+    const missionRoute = (
+      await agent.api
+        .get(
+          `/outlets/route?lat=${IN_PLATEAU.lat}&lng=${IN_PLATEAU.lng}&missionId=${mission.id}`,
+        )
+        .expect(200)
+    ).body;
+    expect((missionRoute.stops as Body[]).map((s) => s.name)).toEqual([
+      'Récent',
+      'Près',
+      'Loin',
+    ]);
+
+    // Avis du matin : une fois par jour, à partir de 8 h, avec le nombre de retards.
+    const notices = async () =>
+      (
+        await owner.query<{ body: string }[]>(
+          `SELECT n.body FROM notifications n JOIN users u ON u.id = n.user_id
+           WHERE u.tenant_id = $1 AND n.type = 'outlets.overdue'`,
+          [t.tenantId],
+        )
+      ).map((n) => n.body);
+    await t.settings({ timezone: 'Africa/Abidjan' });
+    await jobs.outletsOverdue(new Date('2026-11-02T06:00:00Z'));
+    expect(await notices()).toEqual([]);
+    await jobs.outletsOverdue(new Date('2026-11-02T09:00:00Z'));
+    expect(await notices()).toEqual([
+      '2 points de vente ne sont pas visités depuis plus longtemps que prévu.',
+    ]);
+    await jobs.outletsOverdue(new Date('2026-11-02T15:00:00Z'));
+    expect(await notices()).toHaveLength(1);
+
+    // Suivi désactivé par la structure : plus de retard.
+    await t.settings({ outletVisitFrequencyDays: 0 });
+    expect((await t.admin.api.get('/outlets').expect(200)).body.overdue).toBe(
+      0,
+    );
+  });
+});
+
 describe('Recherche de lieux pour créer une zone', () => {
   it('trouve une commune sans tenir compte des accents', async () => {
     const t = await newTenant(app);

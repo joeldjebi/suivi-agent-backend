@@ -113,6 +113,10 @@ export class TenantSettings {
   @Column({ name: 'visit_radius_meters', default: 50 })
   visitRadiusMeters: number;
 
+  /** Fréquence de visite des points de vente par défaut, en jours (0 = pas de suivi) */
+  @Column({ name: 'outlet_visit_frequency_days', default: 30 })
+  outletVisitFrequencyDays: number;
+
   /** Durée de travail attendue par jour pour les agents, en minutes (8 h par défaut) */
   @Column({ name: 'workday_minutes' })
   workdayMinutes: number;

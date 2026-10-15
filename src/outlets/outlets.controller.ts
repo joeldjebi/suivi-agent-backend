@@ -37,6 +37,7 @@ import {
   ListOutletsQuery,
   MergeOutletDto,
   OutletFieldsDto,
+  OutletRouteQuery,
   OutletsMapQuery,
   UpdateOutletDto,
 } from './outlets.dto';
@@ -133,6 +134,15 @@ export class OutletsController {
       res,
       await this.outlets.export(user, query, req.originalUrl, req.ip),
     );
+  }
+
+  /**
+   * Tournée optimisée depuis la position donnée : points de vente en retard de visite, ou
+   * ceux qui restent à visiter dans une mission (missionId).
+   */
+  @Get('route')
+  route(@CurrentUser() user: AuthUser, @Query() query: OutletRouteQuery) {
+    return this.outlets.route(user, query);
   }
 
   @Get(':id')
