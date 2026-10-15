@@ -1691,6 +1691,180 @@ describe('Fréquence de visite, retards et tournées', () => {
   });
 });
 
+describe('Modules indépendants : points de vente sans missions', () => {
+  it('visite libre avec formulaire et relevés, sans la fonction Missions ; synchronisée avec les points de vente', async () => {
+    const t = await newTenant(app);
+    // Formule « Points de vente » sans Missions.
+    await owner.query(
+      `INSERT INTO plans (code, name, description, sort, is_active, monthly_price, included_agents, included_leads, extra_agent_price, features)
+       SELECT 'pdv-seul', 'PDV seul', description, 99, false, monthly_price, included_agents, included_leads, extra_agent_price,
+              ARRAY['groups', 'team_leads', 'exports', 'points_of_sale', 'product_audits']
+       FROM plans WHERE code = 'enterprise'
+       ON CONFLICT (code) DO UPDATE SET features = EXCLUDED.features`,
+    );
+    await owner.query(
+      `UPDATE subscriptions SET plan_code = 'pdv-seul', status = 'active', trial_ends_at = NULL WHERE tenant_id = $1`,
+      [t.tenantId],
+    );
+    app.get(SubscriptionsService).invalidateAll();
+    const plateau = await t.createZone('Plateau', PLATEAU);
+    await t.createZone('Cocody', COCODY);
+    const agent = await t.createUser('agent');
+    const lead = await t.createUser('team_lead');
+    await t.admin.api.get('/missions').expect(402);
+
+    // Les formulaires (socle commun) restent utilisables par le module Points de vente.
+    const coca = (
+      await t.admin.api
+        .post('/products', { name: 'Coca-Cola', own: true, unit: 'Bouteille' })
+        .expect(201)
+    ).body as Body;
+    const type = (
+      await t.admin.api
+        .post('/mission-types', {
+          name: 'Visite commerciale',
+          fields: [
+            {
+              key: 'remarque',
+              label: 'Remarque',
+              type: 'text',
+              required: false,
+            },
+            {
+              key: 'releve',
+              label: 'Relevé',
+              type: 'products',
+              required: false,
+              products: { scope: 'all', measures: ['presence', 'stock'] },
+            },
+          ],
+        })
+        .expect(201)
+    ).body as { id: string };
+    const other = (
+      await t.admin.api
+        .post('/mission-types', { name: 'Autre', fields: [] })
+        .expect(201)
+    ).body as { id: string };
+    await t.admin.api
+      .put('/outlets/visit-forms', { typeIds: [type.id] })
+      .expect(200);
+    const forms = (await agent.api.get('/outlets/visit-forms').expect(200))
+      .body as Body[];
+    expect(forms.map((f) => f.name)).toEqual(['Visite commerciale']);
+    expect((forms[0].products.releve as Body[]).map((p) => p.name)).toEqual([
+      'Coca-Cola',
+    ]);
+
+    const outlet = (
+      await t.admin.api
+        .post('/outlets', { name: 'Boutique Awa', ...IN_PLATEAU })
+        .expect(201)
+    ).body as Body;
+    const inCocody = (
+      await t.admin.api
+        .post('/outlets', { name: 'Maquis Est', lat: 5.355, lng: -3.98 })
+        .expect(201)
+    ).body as Body;
+    const visit = (
+      o: Body,
+      body: object = {},
+      at: { lat: number; lng: number } = IN_PLATEAU,
+    ) =>
+      agent.api.post(`/outlets/${o.id}/visits`, {
+        clientId: randomUUID(),
+        typeId: type.id,
+        data: {
+          remarque: 'RAS',
+          releve: { [coca.id]: { presence: true, stock: 24 } },
+        },
+        ...at,
+        submittedAt: new Date(Date.now() + 1000).toISOString(),
+        ...body,
+      });
+
+    // Mêmes règles que le premier module : journée démarrée, zone du jour, sur place.
+    await visit(outlet)
+      .expect(409)
+      .expect((r) => expect(r.body.code).toBe('DAY_REQUIRED'));
+    await agent.api.post('/zone-requests', { zoneId: plateau.id }).expect(201);
+    await agent.api.post('/days/start').expect(200);
+    await visit(outlet, { typeId: other.id })
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('VISIT_FORM_NOT_ALLOWED'));
+    await visit(
+      outlet,
+      {},
+      { lat: IN_PLATEAU.lat + 0.002, lng: IN_PLATEAU.lng },
+    )
+      .expect(409)
+      .expect((r) => expect(r.body.code).toBe('VISIT_TOO_FAR'));
+    await visit(inCocody, {}, { lat: 5.355, lng: -3.98 })
+      .expect(409)
+      .expect((r) => expect(r.body.code).toBe('WRONG_ZONE'));
+    const clientId = randomUUID();
+    const saved = (
+      await visit(outlet, {
+        clientId,
+        outletStatus: 'active',
+        outletComment: 'Commande',
+      }).expect(201)
+    ).body;
+    expect(saved).toMatchObject({
+      missionId: null,
+      typeId: type.id,
+      outletId: outlet.id,
+      status: 'accepted',
+    });
+    expect((await visit(outlet, { clientId }).expect(201)).body.id).toBe(
+      saved.id,
+    );
+
+    // Synchronisé avec tout le module : fiche, retards, relevés, tableau de bord, export.
+    const fiche = (await t.admin.api.get(`/outlets/${outlet.id}`).expect(200))
+      .body;
+    expect(fiche).toMatchObject({
+      status: 'active',
+      overdue: false,
+      daysSinceVisit: 0,
+    });
+    expect(fiche.visits[0]).toMatchObject({
+      missionId: null,
+      missionTitle: 'Visite commerciale',
+    });
+    expect(
+      (await t.admin.api.get('/insights/products/overview').expect(200)).body,
+    ).toMatchObject({ visits: 1, outlets: 1 });
+    const csv = await t.admin.api
+      .get(`/exports/submissions?typeId=${type.id}&format=csv`)
+      .expect(200);
+    expect(csv.text).toContain('Visite libre · Boutique Awa');
+
+    // Le chef peut rejeter une visite libre : elle ne compte plus.
+    await t.createGroup('Nord', lead.id, [agent.id], [plateau.id]);
+    await lead.api
+      .post(`/outlets/visits/${saved.id}/reject`, { reason: 'Photo floue' })
+      .expect(200);
+    const [notice] = await owner.query<{ body: string }[]>(
+      `SELECT body FROM notifications WHERE user_id = $1 AND type = 'visit.rejected'`,
+      [agent.id],
+    );
+    expect(notice.body).toBe('Photo floue');
+    expect(
+      (await t.admin.api.get(`/outlets/${outlet.id}`).expect(200)).body
+        .lastVisitAt,
+    ).toBeNull();
+
+    // Formule de test retirée : les autres tests voient le catalogue d'origine.
+    await owner.query(
+      `UPDATE subscriptions SET plan_code = 'enterprise' WHERE tenant_id = $1`,
+      [t.tenantId],
+    );
+    await owner.query(`DELETE FROM plans WHERE code = 'pdv-seul'`);
+    app.get(SubscriptionsService).invalidateAll();
+  });
+});
+
 describe('Recherche de lieux pour créer une zone', () => {
   it('trouve une commune sans tenir compte des accents', async () => {
     const t = await newTenant(app);
@@ -3132,8 +3306,8 @@ describe('Formulaires avec photo et « Ma semaine »', () => {
     );
     const formAt = async (at: string, status = 'accepted') =>
       owner.query(
-        `INSERT INTO mission_submissions (tenant_id, mission_id, agent_id, client_id, data, submitted_at, status)
-         VALUES ($1, $2, $3, gen_random_uuid(), '{"nom":"x"}', $4, $5)`,
+        `INSERT INTO mission_submissions (tenant_id, mission_id, type_id, agent_id, client_id, data, submitted_at, status)
+         VALUES ($1, $2, (SELECT type_id FROM missions WHERE id = $2), $3, gen_random_uuid(), '{"nom":"x"}', $4, $5)`,
         [t.tenantId, mission.id, agent.id, at, status],
       );
     await formAt('2026-09-07 11:00');

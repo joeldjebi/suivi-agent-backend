@@ -4,6 +4,7 @@ import {
   ArrayMaxSize,
   IsArray,
   IsBoolean,
+  IsDateString,
   IsIn,
   IsLatitude,
   IsLongitude,
@@ -246,4 +247,50 @@ export class ExportOutletsQuery extends OutletsMapQuery {
   @IsOptional()
   @IsIn(['xlsx', 'csv'])
   format?: 'xlsx' | 'csv';
+}
+
+/** Formulaires proposés pour visiter un point de vente sans mission. */
+export class VisitFormsDto {
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsUUID('all', { each: true })
+  typeIds: string[];
+}
+
+/** Visite libre d'un point de vente (sans mission) : idempotente grâce à clientId. */
+export class CreateVisitDto {
+  @IsUUID()
+  clientId: string;
+
+  /** Formulaire de visite choisi */
+  @IsUUID()
+  typeId: string;
+
+  @IsObject()
+  data: Record<string, unknown>;
+
+  @IsOptional()
+  @IsLatitude()
+  lat?: number;
+
+  @IsOptional()
+  @IsLongitude()
+  lng?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  accuracy?: number;
+
+  @IsDateString()
+  submittedAt: string;
+
+  @IsOptional()
+  @IsIn(Object.values(OutletStatus))
+  outletStatus?: OutletStatus;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  outletComment?: string;
 }

@@ -9,8 +9,13 @@ export class MissionSubmission {
   @Column({ name: 'tenant_id', type: 'uuid' })
   tenantId: string;
 
-  @Column({ name: 'mission_id', type: 'uuid' })
-  missionId: string;
+  /** Mission ; null : visite libre d'un point de vente (module Points de vente) */
+  @Column({ name: 'mission_id', type: 'uuid', nullable: true })
+  missionId: string | null;
+
+  /** Formulaire rempli */
+  @Column({ name: 'type_id', type: 'uuid' })
+  typeId: string;
 
   @Column({ name: 'agent_id', type: 'uuid' })
   agentId: string;

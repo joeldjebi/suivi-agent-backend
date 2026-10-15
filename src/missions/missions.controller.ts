@@ -35,7 +35,8 @@ import { MissionsService } from './missions.service';
 
 @ApiTags('Types de missions')
 @ApiBearerAuth()
-@RequiresFeature(Feature.Missions)
+// Socle commun : les formulaires servent aux missions comme aux visites de points de vente.
+@RequiresFeature(Feature.Missions, Feature.PointsOfSale)
 @Controller('mission-types')
 export class MissionTypesController {
   constructor(private readonly types: MissionTypesService) {}

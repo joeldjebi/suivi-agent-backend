@@ -1,9 +1,8 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import {
   Feature,
   FieldType,
   type MissionEarnings,
-  type MissionField,
   type MissionPay,
   MissionStatus,
   ProgressMethod,
@@ -14,7 +13,6 @@ import {
 import { AccessService } from '../common/access.service';
 import type { AuthUser } from '../common/auth-user';
 import {
-  BusinessException,
   badRequest,
   conflict,
   forbidden,
@@ -40,13 +38,10 @@ import {
   WorkDay,
 } from '../entities';
 import { PayrollCalculator, type Payee } from '../payroll/payroll.calculator';
-import {
-  distanceM,
-  OutletsService,
-  type OutletView,
-} from '../outlets/outlets.service';
+import { OutletsService, type OutletView } from '../outlets/outlets.service';
 import { PhotosService } from '../photos/photos.service';
 import { ProductsService } from '../products/products.service';
+import { assertPresence } from '../outlets/visit-rules';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { normalizePay } from './mission-pay';
 import { MissionTypesService } from './mission-types.service';
@@ -649,6 +644,7 @@ export class MissionsService {
     const saved = await m.save(MissionSubmission, {
       tenantId: this.db.tenantId,
       missionId,
+      typeId: mission.typeId,
       outletId: visit?.outlet.id ?? null,
       distanceM: visit?.distance ?? null,
       agentId: user.id,
@@ -663,7 +659,7 @@ export class MissionsService {
       status: SubmissionStatus.Accepted,
     });
     await this.photos.attach(saved.id, photoIds);
-    await this.saveReadings(saved, type.fields);
+    await this.products.saveReadings(saved, type.fields);
     if (visit) {
       if (visit.outlet.lat == null && dto.lat != null && dto.lng != null)
         await this.outlets.locateFromVisit(
@@ -760,7 +756,8 @@ export class MissionsService {
         rejectedAt: new Date(),
       },
     );
-    await this.refreshStatus(submission.missionId);
+    // Visite libre (sans mission) : seul le point de vente est concerné.
+    if (submission.missionId) await this.refreshStatus(submission.missionId);
     await this.notifications.notify([submission.agentId], {
       type: 'submission.rejected',
       title: 'Formulaire rejeté',
@@ -977,62 +974,7 @@ export class MissionsService {
           `« ${outlet.name} » est en dehors des zones de cette mission`,
         );
     }
-    const hasPosition = dto.lat != null && dto.lng != null;
-    if (radius > 0 && !hasPosition)
-      throw badRequest(
-        'POSITION_REQUIRED',
-        'Position introuvable : activez la localisation pour enregistrer la visite',
-      );
-    if (!hasPosition || outlet.lat == null) return { outlet, distance: null };
-    const distance = Math.round(
-      distanceM(dto.lat!, dto.lng!, outlet.lat, outlet.lng!),
-    );
-    const tolerance = Math.min(dto.accuracy ?? 0, 25);
-    if (radius > 0 && distance > radius + tolerance)
-      throw new BusinessException(
-        HttpStatus.CONFLICT,
-        'VISIT_TOO_FAR',
-        `Vous êtes à ${distance} m de « ${outlet.name} » : rapprochez-vous (${radius} m au plus)`,
-        { distance, radius },
-      );
-    return { outlet, distance };
-  }
-
-  /** Relevés par produit : une ligne par produit, pour les tableaux de bord. */
-  private async saveReadings(
-    submission: MissionSubmission,
-    fields: MissionField[],
-  ) {
-    for (const field of fields) {
-      if (field.type !== FieldType.Products) continue;
-      const readings = submission.data[field.key] as
-        Record<string, Record<string, number | boolean>> | undefined;
-      if (!readings) continue;
-      for (const [productId, r] of Object.entries(readings)) {
-        await this.db.manager.query(
-          `INSERT INTO product_readings (tenant_id, submission_id, mission_id, outlet_id, agent_id,
-                                         product_id, field_key, presence, stock, price, sold, losses,
-                                         ordered, submitted_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
-          [
-            this.db.tenantId,
-            submission.id,
-            submission.missionId,
-            submission.outletId,
-            submission.agentId,
-            productId,
-            field.key,
-            r.presence ?? null,
-            r.stock ?? null,
-            r.price ?? null,
-            r.sold ?? null,
-            r.losses ?? null,
-            r.ordered ?? null,
-            submission.submittedAt,
-          ],
-        );
-      }
-    }
+    return { outlet, distance: assertPresence(outlet, dto, radius) };
   }
 
   /** Points de vente visibles par l'utilisateur. */

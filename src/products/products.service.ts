@@ -279,6 +279,53 @@ export class ProductsService {
     };
   }
 
+  /**
+   * Relevés par produit d'un formulaire reçu (visite libre ou de mission) : une ligne par
+   * produit, pour les tableaux de bord.
+   */
+  async saveReadings(
+    submission: {
+      id: string;
+      missionId: string | null;
+      outletId: string | null;
+      agentId: string;
+      submittedAt: Date;
+      data: Record<string, unknown>;
+    },
+    fields: MissionField[],
+  ) {
+    for (const field of fields) {
+      if (field.type !== FieldType.Products) continue;
+      const readings = submission.data[field.key] as
+        Record<string, Record<string, number | boolean>> | undefined;
+      if (!readings) continue;
+      for (const [productId, r] of Object.entries(readings)) {
+        await this.db.manager.query(
+          `INSERT INTO product_readings (tenant_id, submission_id, mission_id, outlet_id, agent_id,
+                                         product_id, field_key, presence, stock, price, sold, losses,
+                                         ordered, submitted_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+          [
+            this.db.tenantId,
+            submission.id,
+            submission.missionId,
+            submission.outletId,
+            submission.agentId,
+            productId,
+            field.key,
+            r.presence ?? null,
+            r.stock ?? null,
+            r.price ?? null,
+            r.sold ?? null,
+            r.losses ?? null,
+            r.ordered ?? null,
+            submission.submittedAt,
+          ],
+        );
+      }
+    }
+  }
+
   /** Produits d'un champ « relevé par produit » (actifs), dans l'ordre du catalogue. */
   async forField(config: ProductFieldConfig): Promise<Product[]> {
     const products = await this.list();

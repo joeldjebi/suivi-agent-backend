@@ -32,6 +32,7 @@ import type { ExportFile } from '../exports/exports.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import {
   ChangeOutletStatusDto,
+  CreateVisitDto,
   CreateOutletDto,
   ExportOutletsQuery,
   ListOutletsQuery,
@@ -40,8 +41,11 @@ import {
   OutletRouteQuery,
   OutletsMapQuery,
   UpdateOutletDto,
+  VisitFormsDto,
 } from './outlets.dto';
 import { OutletsService } from './outlets.service';
+import { VisitsService } from './visits.service';
+import { RejectSubmissionDto as RejectVisitDto } from '../missions/missions.dto';
 
 const send = (res: Response, file: ExportFile) => {
   res.set({
@@ -65,7 +69,20 @@ export class OutletsController {
   constructor(
     private readonly outlets: OutletsService,
     private readonly subscriptions: SubscriptionsService,
+    private readonly visits: VisitsService,
   ) {}
+
+  /** Formulaires proposés pour visiter un point de vente sans mission. */
+  @Get('visit-forms')
+  visitForms() {
+    return this.visits.forms();
+  }
+
+  @Roles(Role.Admin)
+  @Put('visit-forms')
+  setVisitForms(@Body() dto: VisitFormsDto) {
+    return this.visits.setForms(dto.typeIds);
+  }
 
   /** Champs de la fiche, types de commerce et statuts. */
   @Get('form')
@@ -174,6 +191,32 @@ export class OutletsController {
     @Body() dto: ChangeOutletStatusDto,
   ) {
     return this.outlets.changeStatus(user, id, dto);
+  }
+
+  /**
+   * Visite libre (sans mission) : sur place, pendant la journée, avec un formulaire de visite
+   * de la structure (relevés compris). Idempotente sur clientId.
+   */
+  @Roles(Role.Agent)
+  @Post(':id/visits')
+  visit(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateVisitDto,
+  ) {
+    return this.visits.visit(user, id, dto);
+  }
+
+  /** Rejet d'une visite libre : elle ne compte plus. */
+  @Roles(Role.Admin, Role.TeamLead)
+  @Post('visits/:submissionId/reject')
+  @HttpCode(200)
+  rejectVisit(
+    @CurrentUser() user: AuthUser,
+    @Param('submissionId', ParseUUIDPipe) submissionId: string,
+    @Body() dto: RejectVisitDto,
+  ) {
+    return this.visits.reject(user, submissionId, dto.reason);
   }
 
   /** Fusion d'un doublon dans la fiche conservée. */

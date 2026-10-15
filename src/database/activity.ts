@@ -911,8 +911,8 @@ export async function generateActivity(
         const target = missionFor(agent, daysAgo);
         const rejected = chance(0.03);
         await q(
-          `INSERT INTO mission_submissions (tenant_id, mission_id, agent_id, day_id, client_id, data, lat, lng, submitted_at, received_at, status, rejected_reason, rejected_by_id, rejected_at)
-           VALUES ($1, $2, $3, $4, gen_random_uuid(), $5, $6, $7, $8, $8, $9, $10, $11,
+          `INSERT INTO mission_submissions (tenant_id, mission_id, type_id, agent_id, day_id, client_id, data, lat, lng, submitted_at, received_at, status, rejected_reason, rejected_by_id, rejected_at)
+           VALUES ($1, $2, (SELECT type_id FROM missions WHERE id = $2), $3, $4, gen_random_uuid(), $5, $6, $7, $8, $8, $9, $10, $11,
                    CASE WHEN $9 = 'rejected' THEN $8::timestamptz + interval '2 hours' END)`,
           [
             tenantId,

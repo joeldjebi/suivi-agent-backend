@@ -16,8 +16,9 @@ export const ALLOW_SUSPENDED = 'allowSuspended';
 export const AllowWhenSuspended = () => SetMetadata(ALLOW_SUSPENDED, true);
 /** Route réservée aux formules qui incluent cette fonctionnalité. */
 export const REQUIRES_FEATURE = 'requiresFeature';
-export const RequiresFeature = (feature: Feature) =>
-  SetMetadata(REQUIRES_FEATURE, feature);
+/** Réservé aux formules qui incluent l'une de ces fonctionnalités (socle commun à plusieurs modules). */
+export const RequiresFeature = (...features: Feature[]) =>
+  SetMetadata(REQUIRES_FEATURE, features);
 export const Roles = (...roles: Role[]) => SetMetadata(ROLES, roles);
 
 export const CurrentUser = createParamDecorator(

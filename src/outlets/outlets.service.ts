@@ -336,19 +336,23 @@ export class OutletsService {
     const visits = await this.db.manager.query<
       {
         id: string;
-        missionId: string;
+        /** null : visite libre */
+        missionId: string | null;
         missionTitle: string;
+        formName: string;
         agent: string;
         submittedAt: Date;
         distance: number | null;
         status: string;
       }[]
     >(
-      `SELECT s.id, m.id AS "missionId", m.title AS "missionTitle",
+      `SELECT s.id, m.id AS "missionId", coalesce(m.title, t.name) AS "missionTitle",
+              t.name AS "formName",
               trim(u.first_name || ' ' || u.last_name) AS agent,
               s.submitted_at AS "submittedAt", s.distance_m AS distance, s.status
        FROM mission_submissions s
-       JOIN missions m ON m.id = s.mission_id
+       JOIN mission_types t ON t.id = s.type_id
+       LEFT JOIN missions m ON m.id = s.mission_id
        JOIN users u ON u.id = s.agent_id
        WHERE s.outlet_id = $1
        ORDER BY s.submitted_at DESC LIMIT 30`,

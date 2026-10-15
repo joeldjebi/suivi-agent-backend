@@ -153,13 +153,15 @@ export class ExportsService {
     const rows = await m.query<Record<string, unknown>[]>(
       `SELECT s.data, s.status, s.rejected_reason AS "rejectedReason", s.lat, s.lng,
               to_char(s.submitted_at AT TIME ZONE $1, 'YYYY-MM-DD HH24:MI') AS at,
-              mi.title AS mission, u.last_name AS "lastName", u.first_name AS "firstName",
+              coalesce(mi.title, 'Visite libre' || coalesce(' · ' || o.name, '')) AS mission,
+              u.last_name AS "lastName", u.first_name AS "firstName",
               g.name AS "group"
        FROM mission_submissions s
-       JOIN missions mi ON mi.id = s.mission_id
+       LEFT JOIN missions mi ON mi.id = s.mission_id
+       LEFT JOIN outlets o ON o.id = s.outlet_id
        JOIN users u ON u.id = s.agent_id
        LEFT JOIN groups g ON g.id = u.group_id
-       WHERE mi.type_id = $2
+       WHERE s.type_id = $2
          AND ($3::uuid IS NULL OR s.mission_id = $3)
          AND ($4::date IS NULL OR (s.submitted_at AT TIME ZONE $1)::date >= $4)
          AND ($5::date IS NULL OR (s.submitted_at AT TIME ZONE $1)::date <= $5)

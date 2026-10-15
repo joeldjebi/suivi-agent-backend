@@ -34,12 +34,13 @@ export class SubscriptionGuard implements CanActivate {
     ) {
       throw subscriptionSuspended();
     }
-    const feature = this.reflector.getAllAndOverride<Feature | undefined>(
+    const required = this.reflector.getAllAndOverride<Feature[] | undefined>(
       REQUIRES_FEATURE,
       targets,
     );
-    if (feature && !summary.features.includes(feature))
-      throw featureNotInPlan(feature, summary.upgrades[feature]);
+    // L'une des fonctionnalités suffit (ex. formulaires : missions ou points de vente).
+    if (required?.length && !required.some((f) => summary.features.includes(f)))
+      throw featureNotInPlan(required[0], summary.upgrades[required[0]]);
     return true;
   }
 }
