@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Role } from '@suivi/shared';
+import { OutletsService } from '../outlets/outlets.service';
 import { AccessService } from '../common/access.service';
 import type { AuthUser } from '../common/auth-user';
 import { badRequest } from '../common/business.exception';
@@ -58,6 +59,7 @@ export class InsightsService {
   constructor(
     private readonly db: DbService,
     private readonly access: AccessService,
+    private readonly outlets: OutletsService,
   ) {}
 
   private async scope(user: AuthUser, q: InsightsQuery): Promise<Scope> {
@@ -240,8 +242,11 @@ export class InsightsService {
    * relevés), sur toute la période disponible.
    */
   async outlet(user: AuthUser, outletId: string) {
+    // Introuvable s'il n'est pas visible (zones de l'agent, équipe du chef).
+    await this.outlets.findForVisit(user, outletId);
+    // L'agent voit tous les relevés du point de vente ; le chef, ceux de son équipe.
     const agents =
-      user.role === Role.Admin ? null : await this.access.agentScope(user);
+      user.role === Role.TeamLead ? await this.access.agentScope(user) : null;
     const rows = await this.db.manager.query<Record<string, unknown>[]>(
       `SELECT pr.product_id AS "productId", p.name, p.format, p.own, p.unit, p.packagings,
               pr.presence, pr.stock::float8 AS stock, pr.price::float8 AS price,

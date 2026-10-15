@@ -35,7 +35,11 @@ export class InsightsController {
     return this.insights.prices(user, q);
   }
 
-  /** Point de vente : dernier relevé de chaque produit et évolution du stock. */
+  /**
+   * Point de vente : dernier relevé de chaque produit et évolution du stock. Ouvert aussi à
+   * l'agent, pour les points de vente qu'il voit (sa fiche sur le terrain).
+   */
+  @Roles(Role.Admin, Role.TeamLead, Role.Agent)
   @Get('outlets/:id')
   outlet(
     @CurrentUser() user: AuthUser,

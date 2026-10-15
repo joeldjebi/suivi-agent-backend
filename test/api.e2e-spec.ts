@@ -1526,6 +1526,19 @@ describe('Tableaux de bord des relevés produits', () => {
         .visits,
     ).toBe(4);
     await agent.api.get('/insights/products/overview').expect(403);
+
+    // Agent : la fiche d'un point de vente qu'il voit, avec les relevés de toute l'équipe.
+    const other = await t.createUser('agent');
+    const seen = (
+      await other.api.get(`/insights/products/outlets/${a.id}`).expect(200)
+    ).body as Body[];
+    expect(seen.map((p) => [p.name, p.last.presence])).toEqual([
+      ['Coca-Cola', false],
+      ['Pepsi', true],
+    ]);
+    await other.api
+      .get('/insights/products/outlets/00000000-0000-4000-8000-000000000000')
+      .expect(404);
   });
 });
 
