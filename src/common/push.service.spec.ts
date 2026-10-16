@@ -26,6 +26,34 @@ function fakeMessaging() {
 }
 
 describe('FirebaseTransport', () => {
+  it('rend les refus d’Apple (clé APNs) sans oublier le jeton', async () => {
+    const messaging = {
+      sendEachForMulticast: (message: MulticastMessage) =>
+        Promise.resolve({
+          responses: message.tokens.map(() => ({
+            success: false,
+            error: {
+              code: 'messaging/third-party-auth-error',
+              message: 'Auth error from APNS or Web Push Service',
+            },
+          })),
+        }),
+    };
+    const transport = new FirebaseTransport(messaging as unknown as Messaging);
+    const result = await transport.send([{ token: 'ios-1', platform: 'ios' }], {
+      type: 'broadcast',
+      title: 'Annonce',
+    });
+    expect(result.invalid).toEqual([]);
+    expect(result.failures).toEqual([
+      {
+        platform: 'ios',
+        code: 'messaging/third-party-auth-error',
+        message: 'Auth error from APNS or Web Push Service',
+      },
+    ]);
+  });
+
   it('envoie une notification affichée par le téléphone, avec ses données', async () => {
     const { sent, transport } = fakeMessaging();
     const result = await transport.send(
@@ -48,6 +76,14 @@ describe('FirebaseTransport', () => {
     expect(sent[0].data).toEqual({ missionId: 'm1', type: 'mission.assigned' });
     expect(sent[0].android?.notification?.channelId).toBe('suivi_agent');
     expect(result.invalid).toEqual(['dead-ios']);
+    // Chaque refus est rendu, avec sa plateforme, pour le journal du serveur.
+    expect(result.failures).toEqual([
+      {
+        platform: 'ios',
+        code: 'messaging/registration-token-not-registered',
+        message: '',
+      },
+    ]);
   });
 
   it('demande de zone : boutons via la catégorie iOS, message en données sur Android', async () => {

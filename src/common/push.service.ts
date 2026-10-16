@@ -16,13 +16,33 @@ export interface PushMessage {
   data?: Record<string, unknown>;
 }
 
-/** Envoi effectif ; renvoie les jetons à oublier (application désinstallée…). */
+/** Envoi refusé pour un téléphone (code Firebase, ex. messaging/third-party-auth-error). */
+export interface PushFailure {
+  platform: string;
+  code: string;
+  message: string;
+}
+
+/** Envoi effectif ; renvoie les jetons à oublier (application désinstallée…) et les refus. */
 export interface PushTransport {
   send(
     tokens: { token: string; platform: string }[],
     message: PushMessage,
-  ): Promise<{ invalid: string[] }>;
+  ): Promise<{ invalid: string[]; failures?: PushFailure[] }>;
 }
+
+/** Explication des refus courants, pour le journal du serveur. */
+const FAILURE_HINTS: Record<string, string> = {
+  'messaging/third-party-auth-error':
+    'Apple refuse la clé APNs (clé révoquée, mauvais Key ID ou Team ID, ou clé de développement/production inversée)',
+  'messaging/registration-token-not-registered':
+    'téléphone désinscrit (app désinstallée ou jeton périmé) : jeton oublié',
+  'messaging/invalid-registration-token': 'jeton invalide : jeton oublié',
+  'messaging/mismatched-credential':
+    'le jeton appartient à un autre projet Firebase que la clé du serveur',
+  'messaging/invalid-argument': 'message refusé (contenu ou jeton mal formé)',
+  'messaging/quota-exceeded': 'quota Firebase dépassé',
+};
 
 /** Catégorie iOS des notifications qui portent des boutons d'action. */
 export const PUSH_CATEGORIES: Record<string, string> = {
@@ -95,10 +115,17 @@ export class FirebaseTransport implements PushTransport {
         },
       });
     const invalid: string[] = [];
+    const failures: PushFailure[] = [];
     for (const batch of batches) {
       const response = await this.messaging.sendEachForMulticast(batch.message);
       response.responses.forEach((r, i) => {
-        const code = r.error?.code ?? '';
+        if (!r.error) return;
+        const code = r.error.code ?? 'inconnu';
+        failures.push({
+          platform: batch.tokens[i].platform,
+          code,
+          message: r.error.message ?? '',
+        });
         if (
           code === 'messaging/registration-token-not-registered' ||
           code === 'messaging/invalid-registration-token'
@@ -106,7 +133,7 @@ export class FirebaseTransport implements PushTransport {
           invalid.push(batch.tokens[i].token);
       });
     }
-    return { invalid };
+    return { invalid, failures };
   }
 }
 
@@ -156,6 +183,23 @@ export class PushService implements OnModuleInit {
     }
   }
 
+  /** Refus regroupés par plateforme et code : « 1 iPhone sur 3 — Apple refuse la clé… ». */
+  private logFailures(type: string, total: number, failures: PushFailure[]) {
+    const groups = new Map<string, PushFailure[]>();
+    for (const f of failures) {
+      const key = `${f.platform} ${f.code}`;
+      groups.set(key, [...(groups.get(key) ?? []), f]);
+    }
+    for (const [, list] of groups) {
+      const { platform, code, message } = list[0];
+      const device = platform === 'ios' ? 'iPhone' : 'Android';
+      this.logger.warn(
+        `Push « ${type} » refusé pour ${list.length} ${device} sur ${total} téléphone(s) : ${code}` +
+          ` — ${FAILURE_HINTS[code] ?? message}`,
+      );
+    }
+  }
+
   get enabled() {
     return this.transport !== null;
   }
@@ -187,7 +231,8 @@ export class PushService implements OnModuleInit {
         ),
       );
       if (!tokens.length) return;
-      const { invalid } = await transport.send(tokens, message);
+      const { invalid, failures = [] } = await transport.send(tokens, message);
+      this.logFailures(message.type, tokens.length, failures);
       if (invalid.length)
         await this.db.runAsSystem(() =>
           this.db.manager.query(
