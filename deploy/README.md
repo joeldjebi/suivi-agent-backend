@@ -110,7 +110,9 @@ Les autres sites ne sont pas touchés.
    retirée si elle est refusée : les autres sites ne sont jamais coupés) :
    `sh cpanel/install.sh performx performx.online`
    Le filtre ModSecurity est désactivé pour ce seul domaine (l'application valide déjà ses
-   données ; ses règles génériques bloqueraient des envois normaux).
+   données ; ses règles génériques bloqueraient des envois normaux), et la politique de
+   sécurité (Content-Security-Policy) posée globalement par Apache pour d'autres sites est
+   retirée : elle bloquait le fond de carte (OpenStreetMap).
 
 6. Dans `.env` : `CORS_ORIGIN=https://performx.online,https://www.performx.online,http://185.215.167.87:8090`
    puis `docker compose -f docker-compose.prod.yml up -d api`.
