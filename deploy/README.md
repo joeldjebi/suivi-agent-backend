@@ -106,16 +106,11 @@ Les autres sites ne sont pas touchés.
 4. Modules Apache nécessaires (WHM → *EasyApache 4* sinon : mod_proxy, mod_proxy_http,
    mod_proxy_wstunnel, mod_headers) :
    `httpd -M | grep -E 'proxy_module|proxy_http|proxy_wstunnel|headers'`
-5. Renvoi vers l'application :
-
-```
-mkdir -p /etc/apache2/conf.d/userdata/std/2_4/performx/performx.online /etc/apache2/conf.d/userdata/ssl/2_4/performx/performx.online
-cp cpanel/http.conf /etc/apache2/conf.d/userdata/std/2_4/performx/performx.online/suivi-agent.conf
-cp cpanel/https.conf /etc/apache2/conf.d/userdata/ssl/2_4/performx/performx.online/suivi-agent.conf
-/scripts/ensure_vhost_includes --user=performx
-/scripts/rebuildhttpdconf
-/scripts/restartsrv_httpd
-```
+5. Renvoi vers l'application (configuration vérifiée avant le redémarrage d'Apache, et
+   retirée si elle est refusée : les autres sites ne sont jamais coupés) :
+   `sh cpanel/install.sh performx performx.online`
+   Le filtre ModSecurity est désactivé pour ce seul domaine (l'application valide déjà ses
+   données ; ses règles génériques bloqueraient des envois normaux).
 
 6. Dans `.env` : `CORS_ORIGIN=https://performx.online,https://www.performx.online,http://185.215.167.87:8090`
    puis `docker compose -f docker-compose.prod.yml up -d api`.
