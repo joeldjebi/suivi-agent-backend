@@ -56,7 +56,9 @@ services:
       DATABASE_PORT: 5432
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      TRUST_PROXY: 1
+      # Relais internes (Nginx du site, Apache ou autre proxy du serveur) : l'adresse du
+      # client reste la vraie, même derrière plusieurs relais.
+      TRUST_PROXY: ${TRUST_PROXY:-loopback, linklocal, uniquelocal}
     # Clés hors dépôt (compte de service Firebase pour les notifications push).
     volumes:
       - ./secrets:/app/secrets:ro

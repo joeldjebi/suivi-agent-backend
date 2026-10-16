@@ -9,7 +9,8 @@ async function bootstrap() {
   initMonitoring();
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   // Derrière un proxy (Nginx, Traefik) : vraie adresse du client pour le journal,
-  // la liste blanche et le verrouillage de la connexion éditeur (ex. TRUST_PROXY=1).
+  // la liste blanche et le verrouillage des connexions (ex. TRUST_PROXY=1, ou
+  // « loopback, linklocal, uniquelocal » : tous les relais internes au serveur).
   if (process.env.TRUST_PROXY)
     app.set(
       'trust proxy',
