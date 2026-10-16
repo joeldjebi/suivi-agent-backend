@@ -111,7 +111,8 @@ export class PhotosService {
     if (!ids.length) return;
     const rows = await this.db.manager.query<{ id: string }[]>(
       `SELECT id FROM submission_photos
-       WHERE id = ANY($1::uuid[]) AND agent_id = $2 AND submission_id IS NULL AND outlet_id IS NULL`,
+       WHERE id = ANY($1::uuid[]) AND agent_id = $2 AND submission_id IS NULL AND outlet_id IS NULL
+         AND suggestion_id IS NULL`,
       [ids, agentId],
     );
     if (rows.length !== new Set(ids).size)

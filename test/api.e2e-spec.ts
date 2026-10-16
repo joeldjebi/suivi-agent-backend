@@ -9254,3 +9254,164 @@ describe('Statistiques des formulaires', () => {
     await agent.api.get(`/form-stats/${randomUUID()}`).expect(404);
   });
 });
+
+describe('Produits concurrents signalés depuis le terrain', () => {
+  it('l’agent signale (photo, point de vente), l’administrateur ajoute au catalogue ou refuse', async () => {
+    const t = await newTenant(app);
+    const agent = await t.createUser('agent');
+    const other = await t.createUser('agent');
+    const outlet = (
+      await t.admin.api
+        .post('/outlets', { name: 'Boutique Awa', ...IN_PLATEAU })
+        .expect(201)
+    ).body as Body;
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    const photo = (
+      await request(app.getHttpServer())
+        .post('/api/photos')
+        .set('Authorization', `Bearer ${agent.api.token}`)
+        .attach('file', png, 'produit.png')
+        .field('clientId', randomUUID())
+        .field('takenAt', new Date().toISOString())
+        .expect(201)
+    ).body as { id: string };
+
+    // Signalement : renvoyé (réseau coupé) sans doublon.
+    const body = {
+      clientId: randomUUID(),
+      name: 'Youzou Cola',
+      format: '33 cl',
+      outletId: outlet.id,
+      photoId: photo.id,
+      note: 'Nouveau, moins cher que nous',
+    };
+    const first = (
+      await agent.api.post('/product-suggestions', body).expect(201)
+    ).body as Body;
+    expect(first).toMatchObject({
+      status: 'pending',
+      name: 'Youzou Cola',
+      outletName: 'Boutique Awa',
+      photoId: photo.id,
+    });
+    expect(
+      (
+        (await agent.api.post('/product-suggestions', body).expect(201))
+          .body as Body
+      ).id,
+    ).toBe(first.id);
+    // Une photo ne sert qu'une fois.
+    await agent.api
+      .post('/product-suggestions', { ...body, clientId: randomUUID() })
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('PHOTO_MISSING'));
+    // L'administrateur est prévenu.
+    const [notice] = await owner.query<{ body: string }[]>(
+      `SELECT body FROM notifications WHERE user_id = $1 AND type = 'product.suggested'`,
+      [t.admin.id],
+    );
+    expect(notice.body).toContain('Youzou Cola 33 cl (Boutique Awa)');
+
+    // Qui voit quoi : l'agent les siens, l'administrateur tous ; la photo aussi.
+    expect(
+      (await other.api.get('/product-suggestions').expect(200)).body,
+    ).toEqual([]);
+    expect(
+      (await agent.api.get('/product-suggestions').expect(200)).body,
+    ).toHaveLength(1);
+    expect(
+      (
+        await t.admin.api
+          .get('/product-suggestions')
+          .query({ status: 'pending' })
+          .expect(200)
+      ).body,
+    ).toHaveLength(1);
+    await t.admin.api.get(`/photos/${photo.id}`).expect(200);
+    await other.api.get(`/photos/${photo.id}`).expect(404);
+
+    // Acceptation : produit concurrent au catalogue, agent prévenu.
+    await agent.api
+      .post(`/product-suggestions/${first.id}/accept`, {})
+      .expect(403);
+    const accepted = (
+      await t.admin.api
+        .post(`/product-suggestions/${first.id}/accept`, {
+          unit: 'Bouteille',
+          packagings: [{ name: 'Casier', units: 12 }],
+        })
+        .expect(200)
+    ).body as Body;
+    expect(accepted).toMatchObject({
+      status: 'accepted',
+      productName: 'Youzou Cola',
+    });
+    const competitors = (
+      await t.admin.api
+        .get('/products')
+        .query({ side: 'competitor' })
+        .expect(200)
+    ).body as Body[];
+    expect(competitors.map((p) => [p.name, p.format, p.own, p.unit])).toEqual([
+      ['Youzou Cola', '33 cl', false, 'Bouteille'],
+    ]);
+    await t.admin.api
+      .post(`/product-suggestions/${first.id}/accept`, {})
+      .expect(409);
+
+    // Refus avec motif ; rattachement d'un doublon à un produit existant.
+    const second = (
+      await agent.api
+        .post('/product-suggestions', {
+          clientId: randomUUID(),
+          name: 'Youzou',
+        })
+        .expect(201)
+    ).body as Body;
+    await t.admin.api
+      .post(`/product-suggestions/${second.id}/reject`, {})
+      .expect(400);
+    const rejected = (
+      await t.admin.api
+        .post(`/product-suggestions/${second.id}/reject`, {
+          reason: 'Déjà au catalogue',
+        })
+        .expect(200)
+    ).body as Body;
+    expect(rejected).toMatchObject({
+      status: 'rejected',
+      rejectReason: 'Déjà au catalogue',
+    });
+    const third = (
+      await agent.api
+        .post('/product-suggestions', {
+          clientId: randomUUID(),
+          name: 'Youzou 33',
+        })
+        .expect(201)
+    ).body as Body;
+    expect(
+      (
+        (
+          await t.admin.api
+            .post(`/product-suggestions/${third.id}/accept`, {
+              productId: accepted.productId,
+            })
+            .expect(200)
+        ).body as Body
+      ).productName,
+    ).toBe('Youzou Cola');
+    const decisions = await owner.query<{ type: string }[]>(
+      `SELECT type FROM notifications WHERE user_id = $1 ORDER BY created_at`,
+      [agent.id],
+    );
+    expect(decisions.map((d) => d.type)).toEqual([
+      'product.suggestion_accepted',
+      'product.suggestion_rejected',
+      'product.suggestion_accepted',
+    ]);
+  });
+});
