@@ -198,7 +198,10 @@ export class VisitsService {
               trim(u.first_name || ' ' || u.last_name) AS agent,
               s.submitted_at AS "submittedAt", s.status, s.rejected_reason AS "rejectedReason",
               s.distance_m AS distance,
-              (SELECT count(*) FROM product_readings pr WHERE pr.submission_id = s.id)::int AS readings
+              (SELECT count(*) FROM product_readings pr WHERE pr.submission_id = s.id)::int AS readings,
+              -- Première photo de la visite : miniature dans l'historique.
+              (SELECT p.id FROM submission_photos p WHERE p.submission_id = s.id
+                ORDER BY p.taken_at, p.id LIMIT 1) AS "photoId"
        FROM mission_submissions s
        JOIN mission_types t ON t.id = s.type_id
        LEFT JOIN missions m ON m.id = s.mission_id

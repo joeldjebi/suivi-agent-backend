@@ -350,12 +350,16 @@ export class OutletsService {
         submittedAt: Date;
         distance: number | null;
         status: string;
+        photoId: string | null;
       }[]
     >(
       `SELECT s.id, m.id AS "missionId", coalesce(m.title, t.name) AS "missionTitle",
               t.name AS "formName",
               trim(u.first_name || ' ' || u.last_name) AS agent,
-              s.submitted_at AS "submittedAt", s.distance_m AS distance, s.status
+              s.submitted_at AS "submittedAt", s.distance_m AS distance, s.status,
+              -- Première photo de la visite : miniature dans la liste.
+              (SELECT p.id FROM submission_photos p WHERE p.submission_id = s.id
+                ORDER BY p.taken_at, p.id LIMIT 1) AS "photoId"
        FROM mission_submissions s
        JOIN mission_types t ON t.id = s.type_id
        LEFT JOIN missions m ON m.id = s.mission_id

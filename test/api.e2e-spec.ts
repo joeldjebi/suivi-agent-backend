@@ -1964,6 +1964,17 @@ describe('Modules indépendants : points de vente sans missions', () => {
     expect(seen.data.rayon).toBe(photo.id);
     expect(seen.photos).toHaveProperty(photo.id);
     await colleague.api.get(`/photos/${photo.id}`).expect(200);
+    // Miniature : la première photo de la visite, dans la fiche et dans l'historique.
+    const ficheVisit = (
+      (await colleague.api.get(`/outlets/${outlet.id}`).expect(200)).body
+        .visits as Body[]
+    ).find((v) => v.id === withPhoto.id)!;
+    expect(ficheVisit.photoId).toBe(photo.id);
+    const historyVisit = (
+      (await colleague.api.get(`/outlets/${outlet.id}/visits`).expect(200)).body
+        .items as Body[]
+    ).find((v) => v.id === withPhoto.id)!;
+    expect(historyVisit.photoId).toBe(photo.id);
 
     // Formule de test retirée : les autres tests voient le catalogue d'origine.
     await owner.query(
