@@ -723,6 +723,55 @@ describe('Points de vente', () => {
     await mine.api.delete(`/outlets/${near.id}`).expect(403);
   });
 
+  it('le chef voit les points de vente de son équipe, pas ceux des autres', async () => {
+    const t = await newTenant(app);
+    await t.settings({ useGroups: true });
+    // Zone rattachée à aucun groupe : ouverte à tous les agents, pas au chef.
+    await t.createZone('Cocody', COCODY);
+    const lead = await t.createUser('team_lead');
+    const mine = await t.createUser('agent');
+    await t.createGroup('Nord', lead.id, [mine.id], []);
+    const inCocody = { lat: 5.355, lng: -3.98 };
+    const create = async (actor: { api: Api }, name: string, dLat: number) =>
+      (
+        await actor.api
+          .post('/outlets', {
+            name,
+            lat: inCocody.lat + dLat,
+            lng: inCocody.lng,
+            force: true,
+          })
+          .expect(201)
+      ).body as Body;
+    await create(mine, 'Kiosque Équipe', 0);
+    const ordered = await create(t.admin, 'Cave Commandée', 0.002);
+    await create(t.admin, 'Maquis Ailleurs', 0.004);
+    const [{ id: tenantId }] = await owner.query<{ id: string }[]>(
+      `SELECT tenant_id AS id FROM outlets WHERE id = $1`,
+      [ordered.id],
+    );
+    await owner.query(
+      `INSERT INTO outlets (tenant_id, name) VALUES ($1, 'Sans position')`,
+      [tenantId],
+    );
+    await owner.query(
+      `INSERT INTO orders (tenant_id, number, client_id, outlet_id, agent_id, taken_at)
+       VALUES ($1, 1, gen_random_uuid(), $2, $3, now())`,
+      [tenantId, ordered.id, mine.id],
+    );
+    const names = async (actor: { api: Api }) =>
+      ((await actor.api.get('/outlets').expect(200)).body.items as Body[])
+        .map((o) => o.name as string)
+        .sort();
+    expect(await names(mine)).toEqual([
+      'Cave Commandée',
+      'Kiosque Équipe',
+      'Maquis Ailleurs',
+      'Sans position',
+    ]);
+    expect(await names(lead)).toEqual(['Cave Commandée', 'Kiosque Équipe']);
+  });
+
   it('import, fusion d’un doublon, export et formule', async () => {
     const t = await newTenant(app);
     await t.createZone('Plateau', PLATEAU);

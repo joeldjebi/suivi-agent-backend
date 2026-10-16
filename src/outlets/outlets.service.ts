@@ -149,6 +149,8 @@ const FROM = `
 interface Scope {
   zones: string[] | null;
   creators: string[];
+  /** Chef : seulement les points de vente de son équipe (pas les fiches à localiser des autres). */
+  team?: boolean;
 }
 
 /** Sans accents ni casse ni ponctuation : « Boutique Awa » = « boutique awa ». */
@@ -1098,23 +1100,38 @@ export class OutletsService {
       return { zones: await this.agentZones(user), creators: [user.id] };
     if (await this.access.supervisesAll(user))
       return { zones: null, creators: [] };
-    // Chef : zones de ses groupes, et fiches créées par lui ou ses agents.
+    // Chef : les points de vente de son équipe — créés, visités ou commandés par lui ou ses
+    // agents — et ceux situés dans les zones de ses groupes.
     const groupIds = await this.access.leaderGroupIds(user.id);
     const zones = await this.db.manager.query<{ id: string }[]>(
       `SELECT DISTINCT zone_id AS id FROM group_zones WHERE group_id = ANY($1::uuid[])`,
       [groupIds],
     );
     const agents = (await this.access.agentScope(user)) ?? [];
-    return { zones: zones.map((z) => z.id), creators: [user.id, ...agents] };
+    return {
+      zones: zones.map((z) => z.id),
+      creators: [user.id, ...agents],
+      team: true,
+    };
   }
 
-  /** Condition SQL du périmètre ; un point de vente sans position est visible de tous (à localiser). */
+  /**
+   * Condition SQL du périmètre. Agent : un point de vente sans position est visible de tous (à
+   * localiser). Chef : les points de vente de son équipe seulement.
+   */
   private scopeSql(scope: Scope, p: (v: unknown) => string) {
     if (!scope.zones) return 'true';
-    return `(o.location IS NULL
-      OR o.created_by = ANY(${p(scope.creators)}::uuid[])
-      OR EXISTS (SELECT 1 FROM zones sz WHERE sz.id = ANY(${p(scope.zones)}::uuid[])
-                 AND sz.is_active AND ST_Covers(sz.area, o.location)))`;
+    const people = p(scope.creators);
+    const inZone = `EXISTS (SELECT 1 FROM zones sz WHERE sz.id = ANY(${p(scope.zones)}::uuid[])
+                 AND sz.is_active AND ST_Covers(sz.area, o.location))`;
+    if (scope.team)
+      return `(o.created_by = ANY(${people}::uuid[])
+        OR EXISTS (SELECT 1 FROM mission_submissions ts
+                   WHERE ts.outlet_id = o.id AND ts.agent_id = ANY(${people}::uuid[]))
+        OR EXISTS (SELECT 1 FROM orders tor
+                   WHERE tor.outlet_id = o.id AND tor.agent_id = ANY(${people}::uuid[]))
+        OR ${inZone})`;
+    return `(o.location IS NULL OR o.created_by = ANY(${people}::uuid[]) OR ${inZone})`;
   }
 
   private async file(
