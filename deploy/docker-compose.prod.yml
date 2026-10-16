@@ -8,10 +8,19 @@
 # Depuis ce dossier (deploy/) : docker compose -f docker-compose.prod.yml up -d --build
 name: suivi-agent
 
+# Journaux des conteneurs limités (3 fichiers de 10 Mo par service) : le disque ne se
+# remplit pas avec le temps.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   db:
     image: postgis/postgis:16-3.4
     restart: unless-stopped
+    logging: *logging
     environment:
       POSTGRES_USER: ${DATABASE_USER}
       POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
@@ -30,6 +39,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    logging: *logging
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redisdata:/data
@@ -37,6 +47,7 @@ services:
   api:
     build: ..
     restart: unless-stopped
+    logging: *logging
     env_file: .env
     environment:
       NODE_ENV: production
@@ -63,10 +74,32 @@ services:
         VITE_TILE_URL: ${VITE_TILE_URL:-}
         VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
     restart: unless-stopped
+    logging: *logging
     ports:
       - "${PUBLIC_PORT:-8090}:80"
     depends_on:
       - api
+
+  # Sauvegarde de la base chaque nuit (2 h), vérifiée, gardée 14 jours, hors du dossier du
+  # code : /opt/suivi-agent/backups. Restauration : sh restore.sh <fichier>.
+  backup:
+    image: postgis/postgis:16-3.4
+    restart: unless-stopped
+    logging: *logging
+    entrypoint: ["sh", "/backup.sh"]
+    environment:
+      PGHOST: db
+      PGUSER: ${DATABASE_USER}
+      PGPASSWORD: ${DATABASE_PASSWORD}
+      PGDATABASE: ${DATABASE_NAME}
+      BACKUP_HOUR: ${BACKUP_HOUR:-2}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+    volumes:
+      - ./backup.sh:/backup.sh:ro
+      - ${BACKUP_DIR:-../../backups}:/backups
+    depends_on:
+      db:
+        condition: service_healthy
 
 volumes:
   pgdata:

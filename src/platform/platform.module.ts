@@ -9,7 +9,7 @@ import {
 } from './platform.controller';
 import { PlatformService } from './platform.service';
 import { PlatformTenantService } from './platform-tenant.service';
-import { LoginThrottle, PlatformIpGuard } from './platform-security';
+import { PlatformIpGuard } from './platform-security';
 
 @Module({
   imports: [PassportModule, AuthModule, SubscriptionsModule],
@@ -19,7 +19,6 @@ import { LoginThrottle, PlatformIpGuard } from './platform-security';
     PlatformTenantService,
     PlatformJwtStrategy,
     PlatformIpGuard,
-    LoginThrottle,
   ],
 })
 export class PlatformModule {}

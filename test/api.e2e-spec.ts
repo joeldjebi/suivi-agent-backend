@@ -177,6 +177,48 @@ describe('Authentification', () => {
       .expect(200);
   });
 
+  it('verrouille un compte après 5 mots de passe faux, quelle que soit l’écriture du numéro', async () => {
+    const t = await newTenant(app);
+    await t.createUser('agent', { phone: '07 11 22 33 44' });
+    const other = await t.createUser('agent');
+    // Même compte, écrit de plusieurs façons.
+    for (const phone of [
+      '0711223344',
+      '07 11 22 33 44',
+      '+2250711223344',
+      '07.11.22.33.44',
+      '0711223344',
+    ])
+      await new Api(app)
+        .post('/auth/login', { phone, password: 'mauvais' })
+        .expect(401);
+    await new Api(app)
+      .post('/auth/login', { phone: '0711223344', password: PASSWORD })
+      .expect(429)
+      .expect((r) => {
+        expect(r.body.code).toBe('TOO_MANY_ATTEMPTS');
+        expect(r.body.message).toContain('Réessayez dans 15 minutes');
+      });
+    // Les autres comptes ne sont pas bloqués.
+    await new Api(app)
+      .post('/auth/login', { email: other.email, password: PASSWORD })
+      .expect(200);
+  });
+
+  it('une connexion réussie remet le compteur d’échecs à zéro', async () => {
+    const t = await newTenant(app);
+    const email = t.admin.email;
+    for (let round = 0; round < 2; round++) {
+      for (let i = 0; i < 4; i++)
+        await new Api(app)
+          .post('/auth/login', { email, password: 'mauvais' })
+          .expect(401);
+      await new Api(app)
+        .post('/auth/login', { email: email.toUpperCase(), password: PASSWORD })
+        .expect(200);
+    }
+  });
+
   it('chacun met à jour son profil et sa photo, pas son numéro de connexion', async () => {
     const t = await newTenant(app);
     const lead = await t.createUser('team_lead');

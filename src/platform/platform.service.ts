@@ -51,7 +51,7 @@ import {
   UpdateTenantDto,
 } from './platform.dto';
 import * as QRCode from 'qrcode';
-import { LoginThrottle } from './platform-security';
+import { LoginThrottle, PLATFORM_LOGIN } from '../common/login-throttle';
 import { PlatformTenantService } from './platform-tenant.service';
 import {
   decryptSecret,
@@ -211,7 +211,7 @@ export class PlatformService {
   async login(dto: PlatformLoginDto, ip = '') {
     const m = this.db.manager;
     // Verrouillage avant toute vérification : le bon mot de passe ne passe plus non plus.
-    await this.throttle.assertAllowed(ip, dto.email);
+    await this.throttle.assertAllowed(PLATFORM_LOGIN, ip, dto.email);
     const admin = await m
       .createQueryBuilder(PlatformAdmin, 'a')
       .addSelect('a.passwordHash')
@@ -232,7 +232,7 @@ export class PlatformService {
           ip,
         ),
       );
-      await this.throttle.fail(ip, dto.email);
+      await this.throttle.fail(PLATFORM_LOGIN, ip, dto.email);
       throw invalidCredentials();
     }
     // Double authentification : le mot de passe seul n'ouvre pas la session.
@@ -243,7 +243,7 @@ export class PlatformService {
       );
       return { mfaRequired: true, mfaToken, expiresIn: MFA_STEP_SECONDS };
     }
-    await this.throttle.reset(dto.email);
+    await this.throttle.reset(PLATFORM_LOGIN, dto.email);
     return this.opened(admin, ip, false);
   }
 
@@ -277,15 +277,15 @@ export class PlatformService {
     }
     const admin = await this.withMfa(sub);
     if (!admin?.isActive || !admin.mfaEnabledAt) throw invalidCredentials();
-    await this.throttle.assertAllowed(ip, admin.email);
+    await this.throttle.assertAllowed(PLATFORM_LOGIN, ip, admin.email);
     if (!(await this.checkSecondFactor(admin, dto.code))) {
       await this.db.runAsSystem(() =>
         this.log(admin, 'auth.mfa_failed', null, {}, ip),
       );
-      await this.throttle.fail(ip, admin.email);
+      await this.throttle.fail(PLATFORM_LOGIN, ip, admin.email);
       throw invalidMfaCode();
     }
-    await this.throttle.reset(admin.email);
+    await this.throttle.reset(PLATFORM_LOGIN, admin.email);
     return this.opened(admin, ip, true);
   }
 

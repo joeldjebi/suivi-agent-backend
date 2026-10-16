@@ -70,6 +70,7 @@ export async function resetDatabase(app: INestApplication, owner: DataSource) {
   const keys = [
     ...(await redis.keys('live:*')),
     ...(await redis.keys('platform:fail:*')),
+    ...(await redis.keys('auth:fail:*')),
     ...(await redis.keys('demo:ip:*')),
   ];
   if (keys.length) await redis.del(...keys);

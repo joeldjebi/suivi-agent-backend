@@ -11,6 +11,7 @@ import {
   badRequest,
   conflict,
 } from '../common/business.exception';
+import { APP_LOGIN, LoginThrottle } from '../common/login-throttle';
 import { DbService } from '../common/db.service';
 import { effectiveSettings } from '../common/access.service';
 import { SessionRevocationService } from '../common/session-revocation.service';
@@ -63,6 +64,7 @@ export class AuthService {
     private readonly revocation: SessionRevocationService,
     private readonly subscriptions: SubscriptionsService,
     private readonly access: AccessService,
+    private readonly throttle: LoginThrottle,
   ) {}
 
   /** Inscription d'une structure : création de son espace et de son administrateur. */
@@ -132,6 +134,9 @@ export class AuthService {
     } else {
       qb.where('lower(u.email) = lower(:email)', { email: dto.email });
     }
+    // Essais de mots de passe : compte verrouillé 15 minutes après 5 échecs.
+    const account = phone ?? dto.phone ?? dto.email ?? '';
+    await this.throttle.assertAllowed(APP_LOGIN, ip ?? '', account);
     const user = await qb.getOne();
 
     const valid =
@@ -147,8 +152,10 @@ export class AuthService {
     if (!valid) {
       // Transaction séparée : celle de la requête est annulée par l'erreur.
       await this.db.runAsSystem(() => this.db.manager.insert(AuditLog, entry));
+      await this.throttle.fail(APP_LOGIN, ip ?? '', account);
       throw invalidCredentials();
     }
+    await this.throttle.reset(APP_LOGIN, account);
     await m.insert(AuditLog, entry);
     return this.issueTokens(user);
   }

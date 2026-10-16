@@ -5,6 +5,7 @@ import { DbService } from './db.service';
 import { NotificationsService } from './notifications.service';
 import { PushService } from './push.service';
 import { RealtimeService } from './realtime.service';
+import { LoginThrottle } from './login-throttle';
 import { RedisService } from './redis.service';
 import { SessionRevocationService } from './session-revocation.service';
 import { ZoneExitsService } from './zone-exits.service';
@@ -16,6 +17,7 @@ import { ZoneExitsService } from './zone-exits.service';
     SessionRevocationService,
     AccessService,
     DbService,
+    LoginThrottle,
     NotificationsService,
     PushService,
     RealtimeService,
@@ -27,6 +29,7 @@ import { ZoneExitsService } from './zone-exits.service';
     SessionRevocationService,
     AccessService,
     DbService,
+    LoginThrottle,
     NotificationsService,
     PushService,
     RealtimeService,

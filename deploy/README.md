@@ -60,8 +60,37 @@ Les migrations de la base s'appliquent automatiquement au démarrage de l'API.
 - État : `docker compose -f docker-compose.prod.yml ps`
 - Journaux : `docker compose -f docker-compose.prod.yml logs -f api`
 - Santé : `curl http://localhost:8090/api/health`
-- Sauvegarde de la base :
-  `docker compose -f docker-compose.prod.yml exec -T db pg_dump -U suivi suivi_agent | gzip > sauvegarde-$(date +%F).sql.gz`
+- Journaux limités à 3 × 10 Mo par conteneur : le disque ne se remplit pas.
+
+## Sauvegardes
+
+Le service `backup` copie la base chaque nuit à 2 h (UTC, heure d'Abidjan), vérifie la
+copie et garde les 14 derniers jours dans `/opt/suivi-agent/backups` (hors du code). Une
+copie est aussi faite à son premier démarrage.
+
+- Voir les copies : `ls -lh /opt/suivi-agent/backups`
+- Journal : `docker compose -f docker-compose.prod.yml logs backup` (« OK » ou « ÉCHEC »)
+- Copie immédiate (avant une opération délicate) :
+  `docker compose -f docker-compose.prod.yml exec backup sh -c 'pg_dump -Fc -f /backups/suivi-agent_$(date -u +%F_%H%M).dump'`
+
+**Restauration** (remplace toute la base, l'API est arrêtée pendant l'opération) :
+
+```
+cd /opt/suivi-agent/suivi-agent-backend/deploy
+sh restore.sh
+sh restore.sh suivi-agent_2026-10-16_0200.dump
+```
+
+La première commande liste les copies ; la seconde restaure celle choisie après
+confirmation (taper `OUI`).
+
+**Copie hors du serveur** : les copies sont sur le même disque que la base ; une panne du
+serveur les emporterait aussi. Les rapatrier régulièrement ailleurs, par exemple depuis un
+autre poste :
+
+```
+scp root@SERVEUR:/opt/suivi-agent/backups/suivi-agent_*.dump ./sauvegardes/
+```
 
 ## Nom de domaine (plus tard)
 
