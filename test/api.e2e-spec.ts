@@ -2610,9 +2610,14 @@ describe('Journée de travail (RG-09, RG-10, RG-21, RG-25 à RG-27)', () => {
     expect(typeof ended.body.workedSeconds).toBe('number');
     expect(typeof ended.body.pausedSeconds).toBe('number');
 
-    // RG-21 : la place est libérée en fin de journée.
+    // RG-21 : la place est libérée en fin de journée ; la journée reste à reprendre.
     expect((await agent.api.get('/days/current').expect(200)).body).toEqual({
       day: null,
+      resumable: {
+        id: started.body.id,
+        endedAt: ended.body.endedAt,
+        workedSeconds: ended.body.workedSeconds,
+      },
       approved: null,
       pending: null,
     });
@@ -2629,6 +2634,78 @@ describe('Journée de travail (RG-09, RG-10, RG-21, RG-25 à RG-27)', () => {
       agent: { id: agent.id },
     });
     await t.admin.api.get(`/days/${started.body.id}`).expect(200);
+  });
+
+  it('reprend la journée terminée le même jour : l’interruption ne compte pas', async () => {
+    const t = await newTenant(app);
+    const zone = await t.createZone('Plateau', PLATEAU);
+    const agent = await t.createUser('agent');
+    await agent.api.post('/zone-requests', { zoneId: zone.id }).expect(201);
+    const first = (await agent.api.post('/days/start').expect(200)).body;
+    await agent.api.post('/days/end').expect(200);
+    // 3 h de travail, terminée il y a 1 h.
+    await owner.query(
+      `UPDATE work_days SET started_at = now() - interval '4 hours',
+                            ended_at = now() - interval '1 hour' WHERE id = $1`,
+      [first.id],
+    );
+    const current = (await agent.api.get('/days/current').expect(200)).body;
+    expect(current.resumable).toMatchObject({ id: first.id });
+    expect(current.resumable.workedSeconds).toBeGreaterThanOrEqual(
+      3 * 3600 - 5,
+    );
+
+    // La zone a été libérée : nouveau choix, puis reprise de la même journée.
+    await agent.api.post('/zone-requests', { zoneId: zone.id }).expect(201);
+    const resumed = (await agent.api.post('/days/start').expect(200)).body;
+    expect(resumed).toMatchObject({
+      id: first.id,
+      status: 'active',
+      endedAt: null,
+      endReason: null,
+      zoneId: zone.id,
+    });
+    expect(resumed.pauses).toHaveLength(1);
+    expect(resumed.pauses[0].reason).toBe('day_ended');
+    expect(resumed.pausedSeconds).toBeGreaterThanOrEqual(3600 - 5);
+    expect(resumed.workedSeconds).toBeGreaterThanOrEqual(3 * 3600 - 5);
+    expect(resumed.workedSeconds).toBeLessThan(3 * 3600 + 60);
+    expect(
+      (await agent.api.get('/days/current').expect(200)).body.resumable,
+    ).toBeNull();
+    // Une seule journée pour cette date.
+    expect(
+      (await t.admin.api.get(`/days?agentId=${agent.id}`).expect(200)).body
+        .total,
+    ).toBe(1);
+
+    // Journée close par la remise à zéro : elle ne se reprend pas.
+    await agent.api.post('/days/end').expect(200);
+    await owner.query(
+      `UPDATE work_days SET end_reason = 'auto_reset' WHERE id = $1`,
+      [first.id],
+    );
+    expect(
+      (await agent.api.get('/days/current').expect(200)).body.resumable,
+    ).toBeNull();
+    await agent.api.post('/zone-requests', { zoneId: zone.id }).expect(201);
+    const fresh = (await agent.api.post('/days/start').expect(200)).body;
+    expect(fresh.id).not.toBe(first.id);
+    expect(fresh.pauses).toEqual([]);
+    await agent.api.post('/days/end').expect(200);
+
+    // Journée d'une autre date (la veille) : une nouvelle journée commence.
+    await owner.query(
+      `UPDATE work_days SET work_date = work_date - 1 WHERE id = $1`,
+      [fresh.id],
+    );
+    expect(
+      (await agent.api.get('/days/current').expect(200)).body.resumable,
+    ).toBeNull();
+    await agent.api.post('/zone-requests', { zoneId: zone.id }).expect(201);
+    expect((await agent.api.post('/days/start').expect(200)).body.id).not.toBe(
+      fresh.id,
+    );
   });
 
   it('démarre sans zone si la structure le permet (RG-26, RG-27)', async () => {
@@ -4974,12 +5051,13 @@ describe('Facturation, notifications et journal des accès', () => {
     await active.api.post('/days/start').expect(200);
     await active.api.post('/days/end').expect(200);
     await active.api.post('/zone-requests', { zoneId: zone.id }).expect(201);
+    // Redémarrage le même jour : la journée reprend, elle compte une seule fois.
     await active.api.post('/days/start').expect(200);
 
     const billing = await t.admin.api.get('/billing/active-agents').expect(200);
     expect(billing.body).toMatchObject({
       activeAgents: 1,
-      agents: [{ id: active.id, days: 2 }],
+      agents: [{ id: active.id, days: 1 }],
     });
     await t.admin.api.get('/billing/active-agents?month=2026-13').expect(400);
     await active.api.get('/billing/active-agents').expect(403);
@@ -4997,7 +5075,7 @@ describe('Facturation, notifications et journal des accès', () => {
     expect(row.firstDay).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(row.workedSeconds).toBeGreaterThanOrEqual(0);
     expect(billing.body.previous.activeAgents).toBe(0);
-    expect(billing.body.shown).toMatchObject({ agents: 1, days: 2 });
+    expect(billing.body.shown).toMatchObject({ agents: 1, days: 1 });
 
     // Filtres : la liste change, le total facturé du mois non.
     const list = async (q: string) =>

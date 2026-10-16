@@ -25,6 +25,9 @@ import { DayHistoryQuery } from './days.dto';
 
 const OPEN = [DayStatus.Active, DayStatus.Paused];
 
+/** Pause qui couvre l'interruption d'une journée terminée puis reprise le même jour. */
+export const DAY_ENDED_PAUSE = 'day_ended';
+
 @Injectable()
 export class DaysService {
   constructor(
@@ -50,8 +53,17 @@ export class DaysService {
         status: In([ZoneRequestStatus.Pending, ZoneRequestStatus.Approved]),
       },
     });
+    // Journée du jour terminée par l'agent : un nouveau démarrage la reprend.
+    const resumable = day ? null : await this.resumableDay(agentId);
     return {
       day: day ? withDurations(day) : null,
+      resumable: resumable
+        ? {
+            id: resumable.id,
+            endedAt: resumable.endedAt,
+            workedSeconds: withDurations(resumable).workedSeconds,
+          }
+        : null,
       approved:
         seats.find((s) => s.status === ZoneRequestStatus.Approved) ?? null,
       pending:
@@ -84,6 +96,31 @@ export class DaysService {
     }
 
     const now = new Date();
+    // Même jour, journée terminée par l'agent : elle reprend, l'interruption devient une
+    // pause (non travaillée). Une journée close par la remise à zéro ne se reprend pas.
+    const ended = await this.resumableDay(agent.id);
+    if (ended) {
+      await m.insert(DayPause, {
+        tenantId: this.db.tenantId,
+        dayId: ended.id,
+        startedAt: ended.endedAt!,
+        endedAt: now,
+        reason: DAY_ENDED_PAUSE,
+      });
+      await m.update(
+        WorkDay,
+        { id: ended.id },
+        {
+          status: DayStatus.Active,
+          endedAt: null,
+          endReason: null,
+          zoneId: zoneId ?? ended.zoneId,
+        },
+      );
+      const day = await this.get(ended.id);
+      this.emitStatus(agent, day);
+      return day;
+    }
     const saved = await m.save(WorkDay, {
       tenantId: this.db.tenantId,
       agentId: agent.id,
@@ -222,6 +259,25 @@ export class DaysService {
     if (user.role === Role.TeamLead)
       await this.access.assertCanManageAgent(user, day.agentId);
     return day;
+  }
+
+  /** Journée du jour (selon l'heure de remise à zéro) terminée par l'agent lui-même. */
+  private async resumableDay(agentId: string) {
+    const settings = await this.access.settings();
+    return this.db.manager.findOne(WorkDay, {
+      where: {
+        agentId,
+        status: DayStatus.Ended,
+        endReason: DayEndReason.Manual,
+        workDate: workDate(
+          new Date(),
+          settings.timezone,
+          settings.dailyResetTime,
+        ),
+      },
+      relations: { pauses: true },
+      order: { endedAt: 'DESC' },
+    });
   }
 
   /** Journées encore ouvertes (pour la remise à zéro quotidienne). */

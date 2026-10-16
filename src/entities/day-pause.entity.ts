@@ -27,4 +27,8 @@ export class DayPause {
 
   @Column({ name: 'ended_at', type: 'timestamptz', nullable: true })
   endedAt: Date | null;
+
+  /** Vide : pause de l'agent ; « day_ended » : journée terminée puis reprise le même jour. */
+  @Column({ type: 'text', nullable: true })
+  reason: string | null;
 }
