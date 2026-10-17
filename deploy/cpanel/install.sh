@@ -44,6 +44,10 @@ RedirectMatch 301 ^$DB_PATH\$ $DB_PATH/
   AuthName "Base PerformX"
   AuthUserFile "$HTPASSWD_FILE"
 $ACCESS
+  # Pages d'erreur de cPanel (401.shtml…) : elles passeraient par le site et répondraient 200,
+  # sans que le navigateur demande le mot de passe.
+  ErrorDocument 401 default
+  ErrorDocument 403 default
   RequestHeader unset Authorization
 </Location>
 ProxyPass $DB_PATH/ http://127.0.0.1:8091$DB_PATH/
