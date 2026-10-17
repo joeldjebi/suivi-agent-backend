@@ -78,7 +78,9 @@ services:
     restart: unless-stopped
     logging: *logging
     ports:
-      - "${PUBLIC_PORT:-8090}:80"
+      # 127.0.0.1 : joignable seulement par Apache sur ce serveur (accès public par le domaine
+      # en HTTPS). PUBLIC_BIND=0.0.0.0 rouvre http://IP:PUBLIC_PORT (anciens téléphones).
+      - "${PUBLIC_BIND:-127.0.0.1}:${PUBLIC_PORT:-8090}:80"
     depends_on:
       - api
 

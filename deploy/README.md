@@ -117,5 +117,8 @@ Les autres sites ne sont pas touchés.
 6. Dans `.env` : `CORS_ORIGIN=https://performx.online,https://www.performx.online,http://185.215.167.87:8090`
    puis `docker compose -f docker-compose.prod.yml up -d api`.
 
-Vérifier : `curl -sI https://performx.online/api/health` (réponse 200). L'ancienne adresse
-`http://IP:8090` reste active pour les téléphones pas encore mis à jour.
+Vérifier : `curl -sI https://performx.online/api/health` (réponse 200).
+
+**Port 8090 fermé au public** (par défaut) : il n'écoute que sur 127.0.0.1, où Apache le
+joint. Pour le rouvrir le temps que d'anciens téléphones se mettent à jour, mettre
+`PUBLIC_BIND=0.0.0.0` dans `.env` puis `docker compose -f docker-compose.prod.yml up -d web`.
