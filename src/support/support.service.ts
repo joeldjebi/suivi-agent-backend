@@ -183,7 +183,7 @@ export class SupportService {
       {
         authorKind: 'platform',
         platformAdminId: admin.id,
-        // Le nom de la personne n'est pas montré à la structure : « Support Suivi Agent ».
+        // Le nom de la personne n'est pas montré à la structure : « Support PerformX ».
         authorName: me ? `${me.firstName} · Support` : 'Support',
         body: dto.body.trim(),
       },

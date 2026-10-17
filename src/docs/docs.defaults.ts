@@ -22,11 +22,11 @@ export const DEFAULT_ARTICLES: DefaultArticle[] = [
   {
     slug: 'bienvenue',
     section: 'Prise en main',
-    title: 'Bienvenue sur Suivi Agent',
+    title: 'Bienvenue sur PerformX',
     summary:
       'Les rôles, le back-office et l’application mobile en deux minutes.',
     audience: STAFF,
-    body: `Suivi Agent vous aide à organiser et suivre vos équipes sur le terrain : où elles travaillent, ce qu’elles font, et ce qui demande votre attention.
+    body: `PerformX vous aide à organiser et suivre vos équipes sur le terrain : où elles travaillent, ce qu’elles font, et ce qui demande votre attention.
 
 ## Trois rôles
 
@@ -163,11 +163,11 @@ Menu **Rémunération**.
 
 [Personnaliser l’application (Paramètres → Application mobile)](/branding) [Retrouver les numéros des agents](/users)
 
-1. **Installer Suivi Agent** (lien fourni par votre administrateur).
+1. **Installer PerformX** (lien fourni par votre administrateur).
 2. Se connecter avec son **numéro de téléphone** et son mot de passe.
 3. Autoriser la **localisation « Toujours »** (pas seulement « pendant l’utilisation »).
 4. Autoriser les **notifications**.
-5. Sur Android : **désactiver l’économie de batterie** pour Suivi Agent (Paramètres → Batterie → Suivi Agent → Non restreinte).
+5. Sur Android : **désactiver l’économie de batterie** pour PerformX (Paramètres → Batterie → PerformX → Non restreinte).
 6. Laisser **la date et l’heure en automatique**.
 
 ## Étape 9 — La première journée
@@ -449,7 +449,7 @@ L’onglet *Missions* liste les objectifs et permet de remplir les formulaires, 
     title: 'Contacter le support',
     summary: 'Poser une question ou signaler un problème.',
     audience: STAFF,
-    body: `Le menu *Aide* → onglet *Support* vous permet d’écrire à l’équipe Suivi Agent.
+    body: `Le menu *Aide* → onglet *Support* vous permet d’écrire à l’équipe PerformX.
 
 1. Cliquez sur **Nouvelle demande**, choisissez une catégorie (question, problème, facturation, suggestion…) et décrivez la situation.
 2. Vous êtes prévenu dès que le support répond ; la réponse apparaît dans le fil de la demande.

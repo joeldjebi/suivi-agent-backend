@@ -173,9 +173,9 @@ export class ProductsService {
       [this.db.tenantId],
     );
     return {
-      filename: 'suivi-agent_modele-produits.xlsx',
+      filename: 'performx_modele-produits.xlsx',
       mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      data: await toXlsx(sheet, `Suivi Agent · ${name}`),
+      data: await toXlsx(sheet, `PerformX · ${name}`),
     };
   }
 

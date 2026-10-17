@@ -4,11 +4,11 @@ import type { LandingContent } from '@suivi/shared';
 export const DEFAULT_LANDING: LandingContent = {
   version: 1,
   brand: {
-    name: 'Suivi Agent',
+    name: 'PerformX',
     tagline: 'Vos équipes terrain, en temps réel.',
   },
   seo: {
-    title: 'Suivi Agent · Pilotez vos équipes terrain en temps réel',
+    title: 'PerformX · Pilotez vos équipes terrain en temps réel',
     description:
       'Positions en direct, zones maîtrisées, missions mesurables et rémunération calculée automatiquement. L’application des structures qui travaillent sur le terrain.',
   },
@@ -278,7 +278,7 @@ export const DEFAULT_LANDING: LandingContent = {
     },
   ],
   footer: {
-    text: 'Suivi Agent, la plateforme de suivi des équipes terrain.',
+    text: 'PerformX, la plateforme de suivi des équipes terrain.',
     email: 'contact@suivi-agent.ci',
     phone: '+225 07 07 07 07 07',
     address: 'Abidjan, Côte d’Ivoire',

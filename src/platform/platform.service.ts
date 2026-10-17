@@ -357,7 +357,7 @@ export class PlatformService {
       { id: admin.id },
       { mfaSecret: encryptSecret(secret, this.mfaKey()), mfaLastStep: null },
     );
-    const url = otpauthUrl(secret, found.email, 'Suivi Agent');
+    const url = otpauthUrl(secret, found.email, 'PerformX');
     return {
       secret,
       otpauthUrl: url,

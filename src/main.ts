@@ -31,7 +31,7 @@ async function bootstrap() {
   app.enableShutdownHooks();
 
   const swaggerConfig = new DocumentBuilder()
-    .setTitle('Suivi Agent API')
+    .setTitle('PerformX API')
     .setDescription(
       "API de la plateforme de suivi des agents terrain. Connectez-vous avec POST /api/auth/login, puis cliquez sur « Authorize » et collez l'accessToken.",
     )

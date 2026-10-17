@@ -345,13 +345,13 @@ export class ExportsService {
       `SELECT name FROM tenants WHERE id = $1`,
       [this.db.tenantId],
     );
-    const filename = `suivi-agent_${base}.${format}`;
+    const filename = `performx_${base}.${format}`;
     return format === 'csv'
       ? { filename, mime: 'text/csv; charset=utf-8', data: toCsv(sheet) }
       : {
           filename,
           mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          data: await toXlsx(sheet, `Suivi Agent · ${name}`),
+          data: await toXlsx(sheet, `PerformX · ${name}`),
         };
   }
 

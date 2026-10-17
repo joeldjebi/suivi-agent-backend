@@ -7142,7 +7142,7 @@ describe('Exports Excel et CSV', () => {
       .expect('Content-Type', /spreadsheetml/)
       .expect(
         'Content-Disposition',
-        new RegExp(`suivi-agent_journees_${today()}_${today()}\\.xlsx`),
+        new RegExp(`performx_journees_${today()}_${today()}\\.xlsx`),
       );
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(xlsx.body as ArrayBuffer);
@@ -8869,7 +8869,7 @@ describe('Site vitrine modulable par l’éditeur', () => {
 
   it('publie le contenu modifié, avec les formules du catalogue', async () => {
     const pub = (await new Api(app).get('/public/landing').expect(200)).body;
-    expect(pub.content.brand.name).toBe('Suivi Agent');
+    expect(pub.content.brand.name).toBe('PerformX');
     expect(pub.plans.map((p: Body) => p.code)).toEqual([
       'base',
       'advanced',
@@ -8938,7 +8938,7 @@ describe('Site vitrine modulable par l’éditeur', () => {
     expect(
       (await new Api(app).get('/public/landing').expect(200)).body.content.brand
         .name,
-    ).toBe('Suivi Agent');
+    ).toBe('PerformX');
 
     const published = (await sa.post('/platform/landing/publish').expect(200))
       .body;
@@ -8964,7 +8964,7 @@ describe('Site vitrine modulable par l’éditeur', () => {
     const restored = (
       await sa.post('/platform/landing/restore-defaults').expect(200)
     ).body;
-    expect(restored.draft.brand.name).toBe('Suivi Agent');
+    expect(restored.draft.brand.name).toBe('PerformX');
     await sa.post('/platform/landing/publish').expect(200);
 
     // Formule retirée du catalogue : elle disparaît du site.
