@@ -252,6 +252,52 @@ function section(value: unknown, path: string): LandingSection {
   }
 }
 
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const MAX_CONTACTS = 5;
+
+/**
+ * Contacts du pied de page : listes `emails` / `phones`, ou ancien champ unique
+ * (`email` / `phone`) des contenus enregistrés avant les listes. Les vides sont ignorés.
+ */
+function contacts(
+  footer: Raw,
+  key: 'emails' | 'phones',
+  legacy: 'email' | 'phone',
+): string[] {
+  const path = `footer.${key}`;
+  const values =
+    footer[key] === undefined || footer[key] === null
+      ? [footer[legacy]]
+      : list(footer[key], path, MAX_CONTACTS, (v) => v);
+  return values
+    .map((v, i) =>
+      str(v, `${path}[${i}]`, key === 'emails' ? 120 : 30, false).trim(),
+    )
+    .filter((v, i) => {
+      if (!v) return false;
+      if (key === 'emails' && !EMAIL.test(v))
+        throw fail(`${path}[${i}]`, 'adresse e-mail invalide');
+      return true;
+    });
+}
+
+/** Ancien format du pied de page (un e-mail, un téléphone) mis au format des listes. */
+export function normalizeFooter(content: LandingContent): LandingContent {
+  const footer = content.footer as LandingContent['footer'] &
+    Partial<Record<'email' | 'phone', string>>;
+  if (Array.isArray(footer.emails) && Array.isArray(footer.phones))
+    return content;
+  const { email, phone, ...rest } = footer;
+  return {
+    ...content,
+    footer: {
+      ...rest,
+      emails: footer.emails ?? (email?.trim() ? [email.trim()] : []),
+      phones: footer.phones ?? (phone?.trim() ? [phone.trim()] : []),
+    },
+  };
+}
+
 export function sanitizeLanding(input: unknown): LandingContent {
   const raw = obj(input, 'contenu');
   const brand = obj(raw.brand, 'brand');
@@ -287,8 +333,8 @@ export function sanitizeLanding(input: unknown): LandingContent {
     sections,
     footer: {
       text: str(footer.text, 'footer.text', 200, false),
-      email: str(footer.email, 'footer.email', 120, false),
-      phone: str(footer.phone, 'footer.phone', 30, false),
+      emails: contacts(footer, 'emails', 'email'),
+      phones: contacts(footer, 'phones', 'phone'),
       address: str(footer.address, 'footer.address', 120, false),
     },
   };

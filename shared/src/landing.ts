@@ -160,8 +160,10 @@ export interface LandingContent {
   sections: LandingSection[];
   footer: {
     text: string;
-    email: string;
-    phone: string;
+    /** Adresses de contact (support, commercial…), dans l'ordre d'affichage */
+    emails: string[];
+    /** Numéros de contact, dans l'ordre d'affichage */
+    phones: string[];
     address: string;
   };
 }

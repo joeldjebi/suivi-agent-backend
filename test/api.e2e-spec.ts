@@ -11,6 +11,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import ExcelJS from 'exceljs';
 import { DataSource } from 'typeorm';
+import { DEFAULT_LANDING } from '../src/landing/landing.defaults';
 import { randomUUID } from 'node:crypto';
 import { hashPassword } from '../src/auth/auth.service';
 import { stepAt, totp } from '../src/platform/totp';
@@ -8865,6 +8866,57 @@ describe('Site vitrine modulable par l’éditeur', () => {
           .expect(200)
       ).body.accessToken as string,
     );
+  });
+
+  it('pied de page : plusieurs e-mails et numéros, ancien format repris', async () => {
+    // Contenu enregistré avant les listes (un e-mail, un téléphone) : lu au format actuel.
+    const legacy = {
+      ...DEFAULT_LANDING,
+      footer: { text: 'Pied', email: 'a@b.ci', phone: '+225 01', address: '' },
+    };
+    await owner.query(
+      `UPDATE landing_pages SET published = $1, draft = NULL WHERE id = 1`,
+      [JSON.stringify(legacy)],
+    );
+    const editor = (await sa.get('/platform/landing').expect(200)).body;
+    expect(editor.draft.footer).toEqual({
+      text: 'Pied',
+      emails: ['a@b.ci'],
+      phones: ['+225 01'],
+      address: '',
+    });
+    expect(editor.hasChanges).toBe(false);
+
+    const content = editor.draft;
+    const put = (footer: Body) =>
+      sa.put('/platform/landing', {
+        content: { ...content, footer: { ...content.footer, ...footer } },
+      });
+    await put({ emails: ['pas-un-email'] })
+      .expect(400)
+      .expect((r) => expect(r.body.message).toContain('footer.emails[0]'));
+    await put({ phones: ['1', '2', '3', '4', '5', '6'] }).expect(400);
+    const saved = (
+      await put({
+        emails: ['support@performx.online', ' ', 'ventes@performx.online'],
+        phones: ['+225 07 00 00 00 01', '+225 05 00 00 00 02'],
+      }).expect(200)
+    ).body;
+    expect(saved.draft.footer.emails).toEqual([
+      'support@performx.online',
+      'ventes@performx.online',
+    ]);
+    await sa.post('/platform/landing/publish').expect(200);
+    const live = (await new Api(app).get('/public/landing').expect(200)).body
+      .content.footer;
+    expect(live).toMatchObject({
+      emails: ['support@performx.online', 'ventes@performx.online'],
+      phones: ['+225 07 00 00 00 01', '+225 05 00 00 00 02'],
+    });
+
+    // Retour au contenu d'origine pour la suite.
+    await sa.post('/platform/landing/restore-defaults').expect(200);
+    await sa.post('/platform/landing/publish').expect(200);
   });
 
   it('publie le contenu modifié, avec les formules du catalogue', async () => {

@@ -17,7 +17,7 @@ import type {
   ListDemoRequestsQuery,
   UpdateDemoRequestDto,
 } from './landing.dto';
-import { sanitizeLanding } from './landing.sanitize';
+import { normalizeFooter, sanitizeLanding } from './landing.sanitize';
 
 /** Image du site : 2 Mo au plus (PNG, JPEG, WebP). */
 export const MAX_ASSET_BYTES = 2 * 1024 * 1024;
@@ -52,7 +52,12 @@ export class LandingService {
               updated_at AS "updatedAt", updated_by AS "updatedBy"
        FROM landing_pages WHERE id = 1`,
     );
-    return row;
+    // Contenus enregistrés avant les listes de contacts : mis au format actuel.
+    return {
+      ...row,
+      draft: row.draft && normalizeFooter(row.draft),
+      published: row.published && normalizeFooter(row.published),
+    };
   }
 
   private log(admin: PlatformUser, action: string, details: object = {}) {

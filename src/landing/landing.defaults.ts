@@ -279,8 +279,8 @@ export const DEFAULT_LANDING: LandingContent = {
   ],
   footer: {
     text: 'PerformX, la plateforme de suivi des équipes terrain.',
-    email: 'contact@suivi-agent.ci',
-    phone: '+225 07 07 07 07 07',
+    emails: [],
+    phones: [],
     address: 'Abidjan, Côte d’Ivoire',
   },
 };
