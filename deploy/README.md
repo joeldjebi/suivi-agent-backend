@@ -1,4 +1,4 @@
-# Déploiement de Suivi Agent
+# Déploiement de PerformX
 
 Toute l'application tourne dans ses propres conteneurs Docker (base PostGIS, Redis, API,
 site web) et n'est exposée que sur **un seul port** (`PUBLIC_PORT`, 8090 par défaut). Rien
@@ -122,3 +122,26 @@ Vérifier : `curl -sI https://performx.online/api/health` (réponse 200).
 **Port 8090 fermé au public** (par défaut) : il n'écoute que sur 127.0.0.1, où Apache le
 joint. Pour le rouvrir le temps que d'anciens téléphones se mettent à jour, mettre
 `PUBLIC_BIND=0.0.0.0` dans `.env` puis `docker compose -f docker-compose.prod.yml up -d web`.
+
+## Interface web de la base (pgAdmin, facultative)
+
+Consultation de la base depuis un navigateur, à une adresse secrète, derrière deux mots de
+passe (celui d'Apache, puis le compte pgAdmin). pgAdmin n'écoute que sur 127.0.0.1:8091.
+
+1. Dans `.env` :
+   ```
+   COMPOSE_PROFILES=dbadmin
+   PGADMIN_PATH=/db-<au moins 8 lettres ou chiffres>
+   PGADMIN_EMAIL=vous@exemple.com
+   PGADMIN_PASSWORD=<mot de passe long>
+   ```
+2. `docker compose -f docker-compose.prod.yml up -d pgadmin`
+3. Règle Apache (le mot de passe d'accès, identifiant `performx`, est demandé la première
+   fois) : `sh cpanel/install.sh performx performx.online /db-…` avec la même adresse.
+   Pour limiter l'accès à une adresse IP : `DB_ALLOW_IP=1.2.3.4 sh cpanel/install.sh …`.
+4. Ouvrir `https://performx.online/db-…/`, se connecter avec `PGADMIN_EMAIL`, ouvrir le
+   serveur « PerformX » : le mot de passe demandé est `DATABASE_PASSWORD`.
+
+Changer le mot de passe Apache : `htpasswd -B /etc/apache2/performx-db.htpasswd performx`.
+Désactiver : retirer `COMPOSE_PROFILES`, `docker compose -f docker-compose.prod.yml stop pgadmin`,
+puis relancer `sh cpanel/install.sh performx performx.online` sans l'adresse.

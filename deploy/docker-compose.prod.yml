@@ -105,6 +105,38 @@ services:
       db:
         condition: service_healthy
 
+  # Interface web de la base (pgAdmin), facultative : COMPOSE_PROFILES=dbadmin dans .env.
+  # Jamais exposée directement : Apache la sert à l'adresse secrète PGADMIN_PATH, derrière un
+  # mot de passe (cpanel/install.sh), puis le compte pgAdmin. La connexion à la base est
+  # préremplie ; son mot de passe est demandé à la première ouverture.
+  pgadmin:
+    image: dpage/pgadmin4:8.14
+    profiles: ["dbadmin"]
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      SCRIPT_NAME: ${PGADMIN_PATH:-/db-a-remplacer}
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-}
+      PGADMIN_DISABLE_POSTFIX: "true"
+      PGADMIN_SERVER_JSON_FILE: /tmp/servers.json
+      PGADMIN_CONFIG_PROXY_X_PROTO_COUNT: "1"
+      PGADMIN_CONFIG_PROXY_X_HOST_COUNT: "1"
+      PGADMIN_CONFIG_UPGRADE_CHECK_ENABLED: "False"
+      PGADMIN_DB_NAME: ${DATABASE_NAME}
+      PGADMIN_DB_USER: ${DATABASE_USER}
+    entrypoint: ["sh", "/pgadmin-start.sh"]
+    ports:
+      # 127.0.0.1 : joignable seulement par Apache sur ce serveur.
+      - "127.0.0.1:${PGADMIN_PORT:-8091}:80"
+    volumes:
+      - ./pgadmin-start.sh:/pgadmin-start.sh:ro
+      - pgadmindata:/var/lib/pgadmin
+    depends_on:
+      db:
+        condition: service_healthy
+
 volumes:
   pgdata:
   redisdata:
+  pgadmindata:
