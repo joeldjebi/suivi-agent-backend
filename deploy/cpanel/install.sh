@@ -52,6 +52,9 @@ $ACCESS
 </Location>
 ProxyPass $DB_PATH/ http://127.0.0.1:8091$DB_PATH/
 ProxyPassReverse $DB_PATH/ http://127.0.0.1:8091$DB_PATH/
+# Adresse sans « / » final (pgAdmin y renvoie après la connexion) : pas vers le site, mais
+# vers la redirection ci-dessus (ProxyPass passe avant RedirectMatch).
+ProxyPassMatch ^$DB_PATH\$ !
 EOF
     cat "$HERE/https.conf"
   } > "$SSL/suivi-agent.conf"
