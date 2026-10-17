@@ -36,6 +36,7 @@ import {
   TenantUsersQuery,
   UpdatePlanDto,
   UpdatePlatformAdminDto,
+  UpdatePlatformProfileDto,
   UpdatePlatformSettingsDto,
   UpdateTenantDto,
   VoidInvoiceDto,
@@ -111,6 +112,15 @@ export class PlatformAuthController {
   @HttpCode(200)
   mfaDisable(@CurrentAdmin() admin: PlatformUser, @Body() dto: MfaDisableDto) {
     return this.platform.mfaDisable(admin, dto);
+  }
+
+  @PlatformRoute()
+  @Patch('profile')
+  profile(
+    @CurrentAdmin() admin: PlatformUser,
+    @Body() dto: UpdatePlatformProfileDto,
+  ) {
+    return this.platform.updateProfile(admin, dto);
   }
 
   @PlatformRoute()
@@ -360,6 +370,15 @@ export class PlatformController {
     @Body() dto: UpdatePlatformAdminDto,
   ) {
     return this.platform.updateAdmin(admin, id, dto.isActive);
+  }
+
+  @Delete('admins/:id')
+  @HttpCode(204)
+  removeAdmin(
+    @CurrentAdmin() admin: PlatformUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.platform.removeAdmin(admin, id);
   }
 
   /** Téléphone perdu : réinitialise la double authentification d'un autre compte éditeur. */

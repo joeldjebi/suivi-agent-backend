@@ -101,8 +101,8 @@ export async function seedPlatform(ds: DataSource, hash: string) {
     ) => m.query<T[]>(sql, params);
 
     await q(
-      `INSERT INTO platform_admins (email, password_hash, first_name, last_name)
-       SELECT $1, $2, 'Serge', 'Aka'
+      `INSERT INTO platform_admins (email, password_hash, first_name, last_name, is_owner)
+       SELECT $1, $2, 'Serge', 'Aka', NOT EXISTS (SELECT 1 FROM platform_admins WHERE is_owner)
        WHERE NOT EXISTS (SELECT 1 FROM platform_admins WHERE lower(email) = $1)`,
       [DEMO_PLATFORM_ADMIN, hash],
     );

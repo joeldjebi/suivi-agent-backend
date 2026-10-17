@@ -17,6 +17,7 @@ import {
   BusinessException,
   badRequest,
   conflict,
+  forbidden,
   notFound,
 } from '../common/business.exception';
 import { DbService } from '../common/db.service';
@@ -47,6 +48,7 @@ import {
   PlatformSubscriptionDto,
   RecordPaymentDto,
   UpdatePlanDto,
+  UpdatePlatformProfileDto,
   UpdatePlatformSettingsDto,
   UpdateTenantDto,
 } from './platform.dto';
@@ -512,6 +514,68 @@ export class PlatformService {
     return this.session(found);
   }
 
+  /**
+   * Profil du compte connecté. Changer d'e-mail (identifiant de connexion) demande le mot de
+   * passe actuel et ferme les autres sessions ; une nouvelle session est remise.
+   */
+  async updateProfile(admin: PlatformUser, dto: UpdatePlatformProfileDto) {
+    const m = this.db.manager;
+    const found = await m
+      .createQueryBuilder(PlatformAdmin, 'a')
+      .addSelect('a.passwordHash')
+      .where('a.id = :id', { id: admin.id })
+      .getOneOrFail();
+    const email = dto.email.trim().toLowerCase();
+    const emailChanged = email !== found.email.toLowerCase();
+    if (emailChanged) {
+      if (
+        !dto.currentPassword ||
+        !(await bcrypt.compare(dto.currentPassword, found.passwordHash))
+      ) {
+        throw badRequest(
+          'INVALID_PASSWORD',
+          'Mot de passe actuel incorrect : il est demandé pour changer d’adresse e-mail',
+        );
+      }
+      const [taken] = await m.query<unknown[]>(
+        `SELECT 1 FROM platform_admins WHERE lower(email) = $1 AND id <> $2`,
+        [email, admin.id],
+      );
+      if (taken) throw conflict('EMAIL_TAKEN', 'Cet email est déjà utilisé');
+    }
+    const changes = {
+      firstName: dto.firstName.trim(),
+      lastName: dto.lastName.trim(),
+      email,
+    };
+    await m.update(PlatformAdmin, { id: admin.id }, changes);
+    if (emailChanged) await this.revocation.revoke(admin.id);
+    await this.log(admin, 'auth.profile', null, {
+      ...(emailChanged ? { from: found.email, to: email } : {}),
+    });
+    return this.session({ ...found, ...changes });
+  }
+
+  /** Seul le compte propriétaire gère les autres comptes ; lui-même n'est jamais touché. */
+  private async manageable(admin: PlatformUser, id: string) {
+    const m = this.db.manager;
+    const [actor, target] = await Promise.all([
+      m.findOneBy(PlatformAdmin, { id: admin.id }),
+      m.findOneBy(PlatformAdmin, { id }),
+    ]);
+    if (!target) throw notFound('Compte');
+    if (!actor?.isOwner)
+      throw forbidden(
+        'Seul le compte propriétaire peut désactiver ou supprimer un compte éditeur',
+      );
+    if (target.isOwner)
+      throw conflict(
+        'OWNER_PROTECTED',
+        'Le compte propriétaire ne peut être ni désactivé ni supprimé',
+      );
+    return target;
+  }
+
   async admins() {
     return this.db.manager.find(PlatformAdmin, {
       order: { createdAt: 'ASC' },
@@ -531,6 +595,7 @@ export class PlatformService {
       firstName: dto.firstName,
       lastName: dto.lastName,
       isActive: true,
+      isOwner: false,
     });
     await this.log(admin, 'admin.create', null, { email: created.email });
     return omit(created, 'passwordHash');
@@ -538,19 +603,21 @@ export class PlatformService {
 
   async updateAdmin(admin: PlatformUser, id: string, isActive: boolean) {
     const m = this.db.manager;
-    const target = await m.findOneBy(PlatformAdmin, { id });
-    if (!target) throw notFound('Compte');
-    if (id === admin.id && !isActive)
-      throw conflict(
-        'CANNOT_DISABLE_SELF',
-        'Vous ne pouvez pas désactiver votre propre compte',
-      );
+    const target = await this.manageable(admin, id);
     await m.update(PlatformAdmin, { id }, { isActive });
     if (!isActive) await this.revocation.revoke(id);
     await this.log(admin, isActive ? 'admin.enable' : 'admin.disable', null, {
       email: target.email,
     });
     return { ...target, isActive };
+  }
+
+  /** Suppression définitive : le journal garde les actions, sans lien vers le compte. */
+  async removeAdmin(admin: PlatformUser, id: string) {
+    const target = await this.manageable(admin, id);
+    await this.revocation.revoke(id);
+    await this.db.manager.delete(PlatformAdmin, { id });
+    await this.log(admin, 'admin.delete', null, { email: target.email });
   }
 
   // -------------------------------------------------------- tableau de bord

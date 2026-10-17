@@ -8650,8 +8650,25 @@ describe('Espace éditeur (super administrateur)', () => {
     const nadia2 = new Api(app, renewed.accessToken as string);
     await nadia2.get('/platform/dashboard').expect(200);
 
+    // Seul le propriétaire gère les autres comptes ; lui-même est protégé.
+    await owner.query(
+      `UPDATE platform_admins SET is_owner = false WHERE is_owner`,
+    );
+    await owner.query(
+      `UPDATE platform_admins SET is_owner = true WHERE id = $1`,
+      [saId],
+    );
+    await nadia2
+      .patch(`/platform/admins/${saId}`, { isActive: false })
+      .expect(403);
+    await nadia2.delete(`/platform/admins/${saId}`).expect(403);
+    await sa
+      .patch(`/platform/admins/${saId}`, { isActive: false })
+      .expect(409)
+      .expect((r) => expect(r.body.code).toBe('OWNER_PROTECTED'));
+    await sa.delete(`/platform/admins/${saId}`).expect(409);
+
     // Désactivé : session coupée, connexion refusée.
-    await sa.patch(`/platform/admins/${saId}`, { isActive: false }).expect(409);
     await sa
       .patch(`/platform/admins/${created.id}`, { isActive: false })
       .expect(200);
@@ -8660,15 +8677,83 @@ describe('Espace éditeur (super administrateur)', () => {
       .post('/platform/auth/login', { email, password: 'NouveauSecret2026' })
       .expect(401);
 
+    // Suppression définitive par le propriétaire.
+    await sa.delete(`/platform/admins/${created.id}`).expect(204);
+    expect(
+      (await sa.get('/platform/admins').expect(200)).body.some(
+        (a: Body) => a.id === created.id,
+      ),
+    ).toBe(false);
+
     const audit = (await sa.get('/platform/audit').expect(200)).body;
     expect(audit.items.map((a: Body) => a.action)).toEqual(
       expect.arrayContaining([
         'admin.create',
         'admin.disable',
+        'admin.delete',
         'auth.password',
         'auth.login_failed',
       ]),
     );
+  });
+
+  it('chaque compte éditeur met à jour son profil', async () => {
+    const email = saEmail();
+    await owner.query(
+      `INSERT INTO platform_admins (email, password_hash, first_name, last_name)
+       VALUES ($1, $2, 'Koffi', 'Profil')`,
+      [email, await hashPassword('Editeur2026!')],
+    );
+    const koffi = await platformLogin(email);
+
+    // Nom seul : pas de mot de passe demandé, la session continue.
+    const renamed = (
+      await koffi
+        .patch('/platform/auth/profile', {
+          firstName: ' Koffi ',
+          lastName: 'Kouassi',
+          email,
+        })
+        .expect(200)
+    ).body;
+    expect(renamed.admin).toMatchObject({
+      firstName: 'Koffi',
+      lastName: 'Kouassi',
+    });
+    await koffi.get('/platform/dashboard').expect(200);
+
+    // Nouvel e-mail : mot de passe exigé, adresse libre, anciennes sessions coupées.
+    const next = saEmail();
+    const body = { firstName: 'Koffi', lastName: 'Kouassi', email: next };
+    await koffi.patch('/platform/auth/profile', body).expect(400);
+    await koffi
+      .patch('/platform/auth/profile', { ...body, currentPassword: 'faux' })
+      .expect(400);
+    await koffi
+      .patch('/platform/auth/profile', {
+        ...body,
+        email: (await sa.get('/platform/auth/me').expect(200)).body.email,
+        currentPassword: 'Editeur2026!',
+      })
+      .expect(409);
+    const moved = (
+      await koffi
+        .patch('/platform/auth/profile', {
+          ...body,
+          email: next.toUpperCase(),
+          currentPassword: 'Editeur2026!',
+        })
+        .expect(200)
+    ).body;
+    expect(moved.admin.email).toBe(next.toLowerCase());
+    await koffi.get('/platform/dashboard').expect(401);
+    await new Api(app, moved.accessToken as string)
+      .get('/platform/dashboard')
+      .expect(200);
+    await new Api(app)
+      .post('/platform/auth/login', { email, password: 'Editeur2026!' })
+      .expect(401);
+    await platformLogin(next);
   });
 });
 

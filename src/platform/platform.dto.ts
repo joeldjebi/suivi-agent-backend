@@ -78,6 +78,27 @@ export class PlatformPasswordDto {
   newPassword: string;
 }
 
+export class UpdatePlatformProfileDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(60)
+  firstName: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(60)
+  lastName: string;
+
+  @IsEmail()
+  @MaxLength(120)
+  email: string;
+
+  /** Exigé pour changer d'adresse e-mail (identifiant de connexion) */
+  @IsOptional()
+  @IsString()
+  currentPassword?: string;
+}
+
 export class CreatePlatformAdminDto {
   @IsEmail()
   email: string;

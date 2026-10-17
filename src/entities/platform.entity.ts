@@ -26,6 +26,10 @@ export class PlatformAdmin {
   @Column({ name: 'is_active' })
   isActive: boolean;
 
+  /** Propriétaire : seul à pouvoir désactiver ou supprimer les autres comptes, jamais supprimé */
+  @Column({ name: 'is_owner', default: false })
+  isOwner: boolean;
+
   @Column({ name: 'last_login_at', type: 'timestamptz', nullable: true })
   lastLoginAt: Date | null;
 
