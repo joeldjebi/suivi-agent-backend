@@ -33,6 +33,7 @@ import { BrandingModule } from './branding/branding.module';
 import { AuditInterceptor } from './common/audit.interceptor';
 import { CommonModule } from './common/common.module';
 import { JwtAuthGuard, RolesGuard } from './common/guards';
+import { HttpExceptionFilter } from './common/http-exception.filter';
 import { QueryFailedFilter } from './common/query-failed.filter';
 import { TenantTransactionInterceptor } from './common/tenant-transaction.interceptor';
 import { DaysModule } from './days/days.module';
@@ -131,6 +132,7 @@ import { ZonesModule } from './zones/zones.module';
     { provide: APP_INTERCEPTOR, useClass: SyncInterceptor },
     { provide: APP_INTERCEPTOR, useClass: TenantTransactionInterceptor },
     { provide: APP_FILTER, useClass: QueryFailedFilter },
+    { provide: APP_FILTER, useClass: HttpExceptionFilter },
   ],
 })
 export class AppModule {}

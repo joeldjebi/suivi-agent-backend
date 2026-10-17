@@ -23,7 +23,8 @@ import { ZoneRequestsService } from '../zone-requests/zone-requests.service';
 @Injectable()
 export class JobsService {
   private readonly logger = new Logger(JobsService.name);
-  private running = false;
+  private minuteRun: Promise<void> | null = null;
+  private minuteQueued: Promise<void> | null = null;
 
   constructor(
     private readonly db: DbService,
@@ -39,25 +40,37 @@ export class JobsService {
     private readonly outlets: OutletsService,
   ) {}
 
-  /** Toutes les minutes : demandes en attente puis remise à zéro quotidienne. */
+  /**
+   * Toutes les minutes : demandes en attente puis remise à zéro quotidienne. Un passage à la
+   * fois : un appel pendant un passage attend sa fin puis repasse (une seule fois), au lieu
+   * d'être ignoré.
+   */
   @Cron(CronExpression.EVERY_MINUTE)
-  async everyMinute() {
-    if (this.running) return;
-    this.running = true;
-    try {
-      await this.forEachTenant('minute', async (settings) => {
-        await this.zoneRequests.processPending(settings);
-        // Remise à zéro d'abord : elle referme les retards de la veille, pas ceux du jour.
-        await this.dailyReset(settings);
-        // Sorties de zone qui durent sans nouvelle position : le chef est prévenu quand même.
-        await this.zoneExits.alertOverdue(settings.zoneExitAlertMinutes);
-        await this.alerts.scan(settings);
-        // Bilan de fin de journée aux responsables, à l'heure réglée (une fois par jour).
-        await this.reports.sendDailyReports(settings);
+  everyMinute(): Promise<void> {
+    if (this.minuteRun) {
+      this.minuteQueued ??= this.minuteRun.then(() => {
+        this.minuteQueued = null;
+        return this.everyMinute();
       });
-    } finally {
-      this.running = false;
+      return this.minuteQueued;
     }
+    this.minuteRun = this.runMinute().finally(() => {
+      this.minuteRun = null;
+    });
+    return this.minuteRun;
+  }
+
+  private async runMinute() {
+    await this.forEachTenant('minute', async (settings) => {
+      await this.zoneRequests.processPending(settings);
+      // Remise à zéro d'abord : elle referme les retards de la veille, pas ceux du jour.
+      await this.dailyReset(settings);
+      // Sorties de zone qui durent sans nouvelle position : le chef est prévenu quand même.
+      await this.zoneExits.alertOverdue(settings.zoneExitAlertMinutes);
+      await this.alerts.scan(settings);
+      // Bilan de fin de journée aux responsables, à l'heure réglée (une fois par jour).
+      await this.reports.sendDailyReports(settings);
+    });
   }
 
   @Cron(CronExpression.EVERY_5_MINUTES)

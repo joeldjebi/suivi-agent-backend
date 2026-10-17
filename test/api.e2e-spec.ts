@@ -303,6 +303,41 @@ describe('Authentification', () => {
   });
 });
 
+describe('Erreurs lisibles', () => {
+  it('les erreurs du framework arrivent en français, avec un code', async () => {
+    const t = await newTenant(app);
+    const agent = await t.createUser('agent');
+    const french = (body: { code?: string; message?: unknown }) => {
+      expect(typeof body.code).toBe('string');
+      expect(typeof body.message).toBe('string');
+      expect(body.message).not.toMatch(
+        /Forbidden|Unauthorized|Cannot (GET|POST)|must be|Validation failed|Not Found|Bad Request/,
+      );
+    };
+    // Rôle insuffisant (contrôle des rôles), sans connexion, route inconnue.
+    french((await agent.api.get('/users').expect(403)).body);
+    french((await new Api(app).get('/users').expect(401)).body);
+    french((await t.admin.api.get('/route-inconnue').expect(404)).body);
+    // Validation (messages anglais de class-validator) et identifiant mal formé.
+    const invalid = (await t.admin.api.post('/zones', { name: 12 }).expect(400))
+      .body;
+    french(invalid);
+    expect(invalid.code).toBe('VALIDATION');
+    french((await t.admin.api.get('/broadcasts/pas-un-uuid').expect(400)).body);
+    // Les erreurs métier gardent leur code et leur message.
+    expect(
+      (
+        await new Api(app)
+          .post('/auth/login', { email: 'x@y.ci', password: 'mauvais1' })
+          .expect(401)
+      ).body,
+    ).toMatchObject({
+      code: 'INVALID_CREDENTIALS',
+      message: 'Identifiant ou mot de passe incorrect',
+    });
+  });
+});
+
 describe('Isolation des structures (multi-tenant)', () => {
   it("une structure ne voit jamais les données d'une autre", async () => {
     const a = await newTenant(app, 'A');
@@ -3330,16 +3365,23 @@ describe('Notifications de l’administrateur aux équipes', () => {
       });
       const history = (await t.admin.api.get('/broadcasts').expect(200))
         .body as {
-        title: string;
-        recipients: number;
-        authorName: string;
-        audience: { target: string };
-      }[];
-      expect(history).toHaveLength(1);
-      expect(history[0]).toMatchObject({
+        items: {
+          title: string;
+          recipients: number;
+          authorName: string;
+          audience: { target: string };
+          status: string;
+          sent: number;
+        }[];
+        total: number;
+      };
+      expect(history.total).toBe(1);
+      expect(history.items[0]).toMatchObject({
         title: 'Réunion demain',
         recipients: 1,
         audience: { target: 'zones' },
+        status: 'sent',
+        sent: 1,
       });
 
       // Réservé à l'administrateur, et à la formule avec notifications push.
@@ -3354,6 +3396,152 @@ describe('Notifications de l’administrateur aux équipes', () => {
         .expect(402)
         .expect((r) => expect(r.body.code).toBe('FEATURE_NOT_IN_PLAN'));
       await owner.query(`DELETE FROM tenants WHERE id = $1`, [t.tenantId]);
+    } finally {
+      push.transport = null;
+    }
+  });
+
+  it('suivi par destinataire : échecs, sans téléphone, lus, filtre et renvoi', async () => {
+    const push = app.get(PushService);
+    // Les jetons « bad-… » sont refusés par Apple (clé APNs) tant que `broken` est vrai.
+    let broken = true;
+    const sent: string[][] = [];
+    push.transport = {
+      send: (tokens) => {
+        sent.push(tokens.map((t) => t.token));
+        const failures = tokens
+          .filter((t) => broken && t.token.startsWith('bad-'))
+          .map((t) => ({
+            token: t.token,
+            platform: t.platform,
+            code: 'messaging/third-party-auth-error',
+            message: 'Auth error from APNS',
+          }));
+        return Promise.resolve({ invalid: [], failures });
+      },
+    };
+    try {
+      const t = await newTenant(app);
+      const ok = await t.createUser('agent');
+      const bad = await t.createUser('agent');
+      const none = await t.createUser('agent');
+      await ok.api
+        .post('/devices', {
+          token: `ok-${'o'.repeat(30)}`,
+          platform: 'android',
+        })
+        .expect(204);
+      await bad.api
+        .post('/devices', { token: `bad-${'b'.repeat(30)}`, platform: 'ios' })
+        .expect(204);
+      const settle = () => new Promise((r) => setTimeout(r, 300));
+      const send = async (title: string) =>
+        (
+          await t.admin.api
+            .post('/broadcasts', {
+              title,
+              body: 'Message',
+              audience: { target: 'agents' },
+            })
+            .expect(201)
+        ).body as { id: string };
+      const first = await send('Annonce 1');
+      await settle();
+
+      type Recipient = {
+        userId: string;
+        status: string;
+        errorCode: string | null;
+        attempts: number;
+        readAt: string | null;
+      };
+      const detail = async (id: string) =>
+        (await t.admin.api.get(`/broadcasts/${id}`).expect(200)).body as {
+          title: string;
+          recipients: Recipient[];
+        };
+      const byUser = (rs: Recipient[]) =>
+        Object.fromEntries(rs.map((r) => [r.userId, r]));
+      let rs = byUser((await detail(first.id)).recipients);
+      expect(rs[ok.id]).toMatchObject({ status: 'sent', attempts: 1 });
+      expect(rs[bad.id]).toMatchObject({
+        status: 'failed',
+        errorCode: 'messaging/third-party-auth-error',
+        attempts: 1,
+      });
+      expect(rs[none.id]).toMatchObject({ status: 'no_device', attempts: 1 });
+      // Les échecs en tête de liste.
+      expect((await detail(first.id)).recipients[0].userId).toBe(bad.id);
+
+      // Lu dans l'app.
+      const note = (
+        (await ok.api.get('/notifications').expect(200)).body as {
+          id: string;
+          type: string;
+        }[]
+      ).find((n) => n.type === 'broadcast')!;
+      await ok.api.post(`/notifications/${note.id}/read`).expect(204);
+      expect(
+        byUser((await detail(first.id)).recipients)[ok.id].readAt,
+      ).not.toBeNull();
+
+      // Liste : statut, compteurs, filtre et pagination.
+      await send('Annonce 2');
+      await settle();
+      const list = async (query: string) =>
+        (await t.admin.api.get(`/broadcasts?${query}`).expect(200)).body as {
+          items: {
+            id: string;
+            title: string;
+            status: string;
+            sent: number;
+            failed: number;
+            noDevice: number;
+            read: number;
+          }[];
+          total: number;
+        };
+      const all = await list('page=1&limit=1');
+      expect(all.total).toBe(2);
+      expect(all.items.map((b) => b.title)).toEqual(['Annonce 2']);
+      const firstRow = (await list('q=Annonce%201')).items[0];
+      expect(firstRow).toMatchObject({
+        status: 'partial',
+        sent: 1,
+        failed: 1,
+        noDevice: 1,
+        read: 1,
+      });
+      expect((await list('status=partial')).total).toBe(2);
+      expect((await list('status=sent')).total).toBe(0);
+      await t.admin.api.get('/broadcasts?status=inconnu').expect(400);
+
+      // Renvoi à l'échec, une fois la clé corrigée : envoyé, sans doublon dans l'app.
+      broken = false;
+      await t.admin.api
+        .post(`/broadcasts/${first.id}/resend`, { userIds: [bad.id] })
+        .expect(201)
+        .expect((r) => expect(r.body).toEqual({ resent: 1 }));
+      await settle();
+      expect(sent.at(-1)).toEqual([`bad-${'b'.repeat(30)}`]);
+      rs = byUser((await detail(first.id)).recipients);
+      expect(rs[bad.id]).toMatchObject({
+        status: 'sent',
+        errorCode: null,
+        attempts: 2,
+      });
+      const badInbox = (await bad.api.get('/notifications').expect(200))
+        .body as { title: string }[];
+      expect(badInbox.filter((n) => n.title === 'Annonce 1')).toHaveLength(1);
+
+      // Seuls les destinataires de l'envoi.
+      await t.admin.api
+        .post(`/broadcasts/${first.id}/resend`, { userIds: [t.admin.id] })
+        .expect(400)
+        .expect((r) => expect(r.body.code).toBe('NOT_A_RECIPIENT'));
+      await t.admin.api
+        .get('/broadcasts/00000000-0000-4000-8000-000000000000')
+        .expect(404);
     } finally {
       push.transport = null;
     }

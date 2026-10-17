@@ -24,9 +24,17 @@ export class NotificationsService {
     private readonly push: PushService,
   ) {}
 
-  async notify(userIds: string[], input: NotificationInput): Promise<void> {
+  /**
+   * `push: false` : l'appelant envoie lui-même sur les téléphones et suit le résultat
+   * (notifications aux équipes). Rend les notifications enregistrées.
+   */
+  async notify(
+    userIds: string[],
+    input: NotificationInput,
+    options: { push?: boolean } = {},
+  ): Promise<Notification[]> {
     const unique = [...new Set(userIds)];
-    if (!unique.length) return;
+    if (!unique.length) return [];
     const tenantId = this.db.tenantId;
     const saved = await this.db.manager.save(
       Notification,
@@ -48,12 +56,14 @@ export class NotificationsService {
         );
       }
       // Push : une fois les données enregistrées, sans retarder la requête.
-      void this.push.sendToUsers(tenantId, unique, {
-        type: input.type,
-        title: input.title,
-        body: input.body,
-        data: input.data,
-      });
+      if (options.push !== false)
+        void this.push.sendToUsers(tenantId, unique, {
+          type: input.type,
+          title: input.title,
+          body: input.body,
+          data: input.data,
+        });
     });
+    return saved;
   }
 }

@@ -128,7 +128,10 @@ export function assertFields(fields: MissionField[]) {
   const keys = new Set<string>();
   for (const field of fields) {
     if (keys.has(field.key))
-      throw badRequest('DUPLICATE_FIELD', `Champ en double : ${field.key}`);
+      throw badRequest(
+        'DUPLICATE_FIELD',
+        `Deux champs portent le même nom : « ${field.label} »`,
+      );
     keys.add(field.key);
     if (field.type === FieldType.Products) {
       const config = field.products;
@@ -149,7 +152,7 @@ export function assertFields(fields: MissionField[]) {
     if (field.type === FieldType.Select && !field.options?.length) {
       throw badRequest(
         'MISSING_OPTIONS',
-        `Le champ ${field.key} doit proposer des options`,
+        `La liste « ${field.label} » doit proposer au moins un choix`,
       );
     }
   }

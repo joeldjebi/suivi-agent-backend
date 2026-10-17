@@ -47,6 +47,7 @@ describe('FirebaseTransport', () => {
     expect(result.invalid).toEqual([]);
     expect(result.failures).toEqual([
       {
+        token: 'ios-1',
         platform: 'ios',
         code: 'messaging/third-party-auth-error',
         message: 'Auth error from APNS or Web Push Service',
@@ -79,6 +80,7 @@ describe('FirebaseTransport', () => {
     // Chaque refus est rendu, avec sa plateforme, pour le journal du serveur.
     expect(result.failures).toEqual([
       {
+        token: 'dead-ios',
         platform: 'ios',
         code: 'messaging/registration-token-not-registered',
         message: '',

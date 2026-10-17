@@ -1,4 +1,5 @@
 import { Type } from 'class-transformer';
+import { PaginationQuery } from '../common/pagination.dto';
 import {
   ArrayMaxSize,
   IsArray,
@@ -68,4 +69,32 @@ export class SendBroadcastDto extends BroadcastPreviewDto {
   @MinLength(2)
   @MaxLength(500)
   body: string;
+}
+
+export const BROADCAST_STATUSES = [
+  'sent',
+  'partial',
+  'failed',
+  'pending',
+  'legacy',
+] as const;
+
+/** Historique : page, recherche dans le titre, statut de l'envoi. */
+export class ListBroadcastsQuery extends PaginationQuery {
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  q?: string;
+
+  @IsOptional()
+  @IsIn(BROADCAST_STATUSES)
+  status?: (typeof BROADCAST_STATUSES)[number];
+}
+
+/** Renvoi aux destinataires choisis. */
+export class ResendBroadcastDto {
+  @IsArray()
+  @ArrayMaxSize(1000)
+  @IsUUID('all', { each: true })
+  userIds: string[];
 }

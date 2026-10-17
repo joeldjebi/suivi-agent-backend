@@ -18,6 +18,7 @@ export interface PushMessage {
 
 /** Envoi refusé pour un téléphone (code Firebase, ex. messaging/third-party-auth-error). */
 export interface PushFailure {
+  token?: string;
   platform: string;
   code: string;
   message: string;
@@ -29,6 +30,12 @@ export interface PushTransport {
     tokens: { token: string; platform: string }[],
     message: PushMessage,
   ): Promise<{ invalid: string[]; failures?: PushFailure[] }>;
+}
+
+/** Résultat de l'envoi pour une personne. */
+export interface PushDelivery {
+  status: 'sent' | 'failed' | 'no_device';
+  code?: string;
 }
 
 /** Explication des refus courants, pour le journal du serveur. */
@@ -122,6 +129,7 @@ export class FirebaseTransport implements PushTransport {
         if (!r.error) return;
         const code = r.error.code ?? 'inconnu';
         failures.push({
+          token: batch.tokens[i].token,
           platform: batch.tokens[i].platform,
           code,
           message: r.error.message ?? '',
@@ -204,35 +212,63 @@ export class PushService implements OnModuleInit {
     return this.transport !== null;
   }
 
-  /**
-   * Envoi aux téléphones de ces utilisateurs, si la formule de leur structure inclut les
-   * notifications push (sauf avis sur l'abonnement lui-même, toujours envoyés) ; les jetons
-   * périmés sont oubliés.
-   */
+  /** Envoi sans suivi (notifications ordinaires de l'app) ; les erreurs vont au journal. */
   async sendToUsers(
     tenantId: string,
     userIds: string[],
     message: PushMessage,
   ): Promise<void> {
+    await this.deliver(tenantId, userIds, message);
+  }
+
+  /**
+   * Envoi aux téléphones de ces utilisateurs, si la formule de leur structure inclut les
+   * notifications push (sauf avis sur l'abonnement lui-même, toujours envoyés) ; les jetons
+   * périmés sont oubliés. Rend le résultat par personne : envoyé si au moins un de ses
+   * téléphones l'a accepté, sinon échec (code du refus) ou pas de téléphone.
+   */
+  async deliver(
+    tenantId: string,
+    userIds: string[],
+    message: PushMessage,
+  ): Promise<Map<string, PushDelivery>> {
+    const result = new Map<string, PushDelivery>();
     const transport = this.transport;
-    if (!transport || !userIds.length) return;
+    if (!userIds.length) return result;
+    const fail = (code: string) => {
+      for (const id of userIds) result.set(id, { status: 'failed', code });
+      return result;
+    };
+    if (!transport) return fail('push_unavailable');
     try {
       const billing =
         message.type.startsWith('subscription.') ||
         message.type.startsWith('invoice.');
       if (!billing) {
         const { features } = await this.subscriptions.summary(tenantId);
-        if (!features.includes(Feature.PushNotifications)) return;
+        if (!features.includes(Feature.PushNotifications))
+          return fail('push_not_in_plan');
       }
       const tokens = await this.db.runAsSystem(() =>
-        this.db.manager.query<{ token: string; platform: string }[]>(
-          `SELECT token, platform FROM push_devices WHERE user_id = ANY($1)`,
+        this.db.manager.query<
+          { token: string; platform: string; userId: string }[]
+        >(
+          `SELECT token, platform, user_id AS "userId" FROM push_devices WHERE user_id = ANY($1)`,
           [userIds],
         ),
       );
-      if (!tokens.length) return;
+      for (const id of userIds) result.set(id, { status: 'no_device' });
+      if (!tokens.length) return result;
       const { invalid, failures = [] } = await transport.send(tokens, message);
       this.logFailures(message.type, tokens.length, failures);
+      const failed = new Map(failures.map((f) => [f.token, f.code]));
+      for (const t of tokens) {
+        const code = failed.get(t.token);
+        const current = result.get(t.userId)!;
+        if (code === undefined) result.set(t.userId, { status: 'sent' });
+        else if (current.status !== 'sent')
+          result.set(t.userId, { status: 'failed', code });
+      }
       if (invalid.length)
         await this.db.runAsSystem(() =>
           this.db.manager.query(
@@ -240,8 +276,10 @@ export class PushService implements OnModuleInit {
             [invalid],
           ),
         );
+      return result;
     } catch (error) {
       this.logger.warn(`Envoi push échoué : ${(error as Error).message}`);
+      return fail('send_error');
     }
   }
 }

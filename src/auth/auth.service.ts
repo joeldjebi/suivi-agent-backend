@@ -43,7 +43,7 @@ const invalidCredentials = () =>
   new BusinessException(
     HttpStatus.UNAUTHORIZED,
     'INVALID_CREDENTIALS',
-    'Email ou mot de passe incorrect',
+    'Identifiant ou mot de passe incorrect',
   );
 
 const hashToken = (token: string) =>

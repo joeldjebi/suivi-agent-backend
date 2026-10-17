@@ -8,6 +8,8 @@ import { initMonitoring } from './common/monitoring';
 async function bootstrap() {
   initMonitoring();
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // Envois volumineux mais légitimes (import, assistant de démarrage avec beaucoup d'agents).
+  app.useBodyParser('json', { limit: '2mb' });
   // Derrière un proxy (Nginx, Traefik) : vraie adresse du client pour le journal,
   // la liste blanche et le verrouillage des connexions (ex. TRUST_PROXY=1, ou
   // « loopback, linklocal, uniquelocal » : tous les relais internes au serveur).
