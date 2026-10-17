@@ -13,6 +13,19 @@ import { Public } from '../common/decorators';
 import { PlatformSettings } from '../entities';
 import type { AppUpdateImportance } from '../entities/subscription.entity';
 
+/** Annonce en direct aux apps connectées : nouvelle version, importance ou liens changés. */
+export const APP_VERSION_EVENT = 'app_version';
+
+/** Réglages qui changent ce que l'app doit proposer ou imposer. */
+export const APP_VERSION_SETTINGS = [
+  'minAppVersion',
+  'latestAppVersion',
+  'appUpdateImportance',
+  'appReleaseNotes',
+  'androidStoreUrl',
+  'iosStoreUrl',
+] as const;
+
 /** 426 : mise à jour nécessaire (absent de HttpStatus). */
 const UPGRADE_REQUIRED = 426;
 

@@ -11,6 +11,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import ExcelJS from 'exceljs';
 import { DataSource } from 'typeorm';
+import { RealtimeService } from '../src/common/realtime.service';
 import { DEFAULT_LANDING } from '../src/landing/landing.defaults';
 import { randomUUID } from 'node:crypto';
 import { hashPassword } from '../src/auth/auth.service';
@@ -8760,6 +8761,7 @@ describe('Espace éditeur (super administrateur)', () => {
 
   it('mise à jour de l’app : importance, nouveautés ; critique = obligatoire', async () => {
     const versions = app.get(AppVersionService);
+    const broadcast = jest.spyOn(app.get(RealtimeService), 'broadcast');
     const reset = () =>
       owner.query(
         `UPDATE platform_settings SET min_app_version = NULL, latest_app_version = NULL,
@@ -8780,6 +8782,23 @@ describe('Espace éditeur (super administrateur)', () => {
           appReleaseNotes: '  Envoi des commandes plus rapide.  ',
         })
         .expect(200);
+      // Annonce en direct aux apps ouvertes : elles affichent la fenêtre sans attendre.
+      for (let i = 0; i < 20 && !broadcast.mock.calls.length; i++)
+        await new Promise((r) => setTimeout(r, 50));
+      expect(broadcast).toHaveBeenCalledWith(
+        'app_version',
+        expect.objectContaining({
+          latestVersion: '1.4.0',
+          importance: 'recommended',
+        }),
+      );
+      broadcast.mockClear();
+      // Réglage sans rapport avec l'app : pas d'annonce.
+      const { trialDays } = (await sa.get('/platform/settings').expect(200))
+        .body;
+      await sa.patch('/platform/settings', { trialDays }).expect(200);
+      await new Promise((r) => setTimeout(r, 200));
+      expect(broadcast).not.toHaveBeenCalled();
       versions.invalidate();
       expect(
         (await new Api(app).get('/app/version').expect(200)).body,
@@ -8809,6 +8828,7 @@ describe('Espace éditeur (super administrateur)', () => {
         .patch('/platform/settings', { appUpdateImportance: 'bloquante' })
         .expect(400);
     } finally {
+      broadcast.mockRestore();
       await reset();
       versions.invalidate();
     }

@@ -27,6 +27,11 @@ export class RealtimeService {
     if (!this.server || !roomNames.length) return;
     this.server.to(roomNames).emit(event, payload);
   }
+
+  /** Tous les appareils connectés, toutes structures confondues (version de l'app). */
+  broadcast(event: string, payload: unknown) {
+    this.server?.emit(event, payload);
+  }
 }
 
 /**

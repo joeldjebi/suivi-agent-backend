@@ -1,4 +1,10 @@
-import { AppVersionService, compareVersions } from '../app-version/app-version';
+import {
+  APP_VERSION_EVENT,
+  APP_VERSION_SETTINGS,
+  AppVersionService,
+  compareVersions,
+} from '../app-version/app-version';
+import { RealtimeService } from '../common/realtime.service';
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
@@ -129,6 +135,7 @@ export class PlatformService {
     private readonly throttle: LoginThrottle,
     private readonly tenantData: PlatformTenantService,
     private readonly appVersions: AppVersionService,
+    private readonly realtime: RealtimeService,
   ) {}
 
   // ------------------------------------------------------------ journal
@@ -1427,7 +1434,17 @@ export class PlatformService {
     }
     if (Object.keys(changes).length)
       await this.db.manager.update(PlatformSettings, { id: 1 }, changes);
-    this.db.afterCommit(() => this.appVersions.invalidate());
+    // Version de l'app changée : les apps ouvertes l'apprennent aussitôt (fenêtre ou blocage).
+    const versionChanged = APP_VERSION_SETTINGS.some(
+      (k) => k in changes && changes[k] !== before[k],
+    );
+    this.db.afterCommit(() => {
+      this.appVersions.invalidate();
+      if (versionChanged)
+        void this.appVersions
+          .info()
+          .then((info) => this.realtime.broadcast(APP_VERSION_EVENT, info));
+    });
     // Quotas de l'essai : relus par toutes les structures.
     this.db.afterCommit(() => this.subscriptions.invalidateAll());
     await this.log(admin, 'settings.update', null, {
