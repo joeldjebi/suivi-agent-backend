@@ -28,6 +28,7 @@ import {
   type PlanCode,
 } from '@suivi/shared';
 import { PaginationQuery } from '../common/pagination.dto';
+import type { AppUpdateImportance } from '../entities/subscription.entity';
 
 export class PlatformLoginDto {
   @IsEmail()
@@ -446,6 +447,18 @@ export class UpdatePlatformSettingsDto {
   @ValidateIf((_, v) => v !== null)
   @Matches(/^\d+\.\d+\.\d+$/, { message: 'Version au format 1.2.0' })
   latestAppVersion?: string | null;
+
+  /** Critique : la version minimale passe à la dernière version (mise à jour obligatoire) */
+  @IsOptional()
+  @IsIn(['minor', 'recommended', 'critical'])
+  appUpdateImportance?: AppUpdateImportance;
+
+  /** Nouveautés de la dernière version, montrées dans l'app */
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsString()
+  @MaxLength(500)
+  appReleaseNotes?: string | null;
 
   /** Lien de téléchargement Android (Play Store ou fichier APK) */
   @IsOptional()

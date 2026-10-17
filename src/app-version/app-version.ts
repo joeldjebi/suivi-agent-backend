@@ -11,6 +11,7 @@ import type { Request } from 'express';
 import { DbService } from '../common/db.service';
 import { Public } from '../common/decorators';
 import { PlatformSettings } from '../entities';
+import type { AppUpdateImportance } from '../entities/subscription.entity';
 
 /** 426 : mise à jour nécessaire (absent de HttpStatus). */
 const UPGRADE_REQUIRED = 426;
@@ -18,6 +19,9 @@ const UPGRADE_REQUIRED = 426;
 export interface AppVersionInfo {
   minVersion: string | null;
   latestVersion: string | null;
+  /** Importance de la dernière version (fenêtre, ou simple bandeau) */
+  importance: AppUpdateImportance;
+  releaseNotes: string | null;
   androidUrl: string | null;
   iosUrl: string | null;
 }
@@ -49,6 +53,8 @@ export class AppVersionService {
     const info = {
       minVersion: s.minAppVersion,
       latestVersion: s.latestAppVersion,
+      importance: s.appUpdateImportance,
+      releaseNotes: s.appReleaseNotes,
       androidUrl: s.androidStoreUrl,
       iosUrl: s.iosStoreUrl,
     };

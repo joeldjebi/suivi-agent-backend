@@ -3982,6 +3982,8 @@ describe('Version minimale de l’app mobile', () => {
     expect((await new Api(app).get('/app/version').expect(200)).body).toEqual({
       minVersion: null,
       latestVersion: null,
+      importance: 'minor',
+      releaseNotes: null,
       androidUrl: null,
       iosUrl: null,
     });
@@ -8754,6 +8756,62 @@ describe('Espace éditeur (super administrateur)', () => {
       .post('/platform/auth/login', { email, password: 'Editeur2026!' })
       .expect(401);
     await platformLogin(next);
+  });
+
+  it('mise à jour de l’app : importance, nouveautés ; critique = obligatoire', async () => {
+    const versions = app.get(AppVersionService);
+    const reset = () =>
+      owner.query(
+        `UPDATE platform_settings SET min_app_version = NULL, latest_app_version = NULL,
+           app_update_importance = 'minor', app_release_notes = NULL`,
+      );
+    try {
+      // Critique sans dernière version : refusé.
+      await sa
+        .patch('/platform/settings', { appUpdateImportance: 'critical' })
+        .expect(400)
+        .expect((r) => expect(r.body.code).toBe('LATEST_VERSION_REQUIRED'));
+
+      // Recommandée : fenêtre côté app, rien d'imposé.
+      await sa
+        .patch('/platform/settings', {
+          latestAppVersion: '1.4.0',
+          appUpdateImportance: 'recommended',
+          appReleaseNotes: '  Envoi des commandes plus rapide.  ',
+        })
+        .expect(200);
+      versions.invalidate();
+      expect(
+        (await new Api(app).get('/app/version').expect(200)).body,
+      ).toMatchObject({
+        minVersion: null,
+        latestVersion: '1.4.0',
+        importance: 'recommended',
+        releaseNotes: 'Envoi des commandes plus rapide.',
+      });
+
+      // Critique : la version minimale devient la dernière version.
+      const settings = (
+        await sa
+          .patch('/platform/settings', { appUpdateImportance: 'critical' })
+          .expect(200)
+      ).body;
+      expect(settings).toMatchObject({
+        minAppVersion: '1.4.0',
+        appUpdateImportance: 'critical',
+      });
+      versions.invalidate();
+      const t = await newTenant(app);
+      const agent = await t.createUser('agent');
+      await agent.api.get('/me/team').set('X-App-Version', '1.3.9').expect(426);
+      await agent.api.get('/me/team').set('X-App-Version', '1.4.0').expect(200);
+      await sa
+        .patch('/platform/settings', { appUpdateImportance: 'bloquante' })
+        .expect(400);
+    } finally {
+      await reset();
+      versions.invalidate();
+    }
   });
 });
 

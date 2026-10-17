@@ -1,4 +1,4 @@
-import { AppVersionService } from '../app-version/app-version';
+import { AppVersionService, compareVersions } from '../app-version/app-version';
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
@@ -1409,8 +1409,25 @@ export class PlatformService {
     const changes = Object.fromEntries(
       Object.entries(dto).filter(([, v]) => v !== undefined),
     ) as Partial<PlatformSettings>;
+    if (typeof changes.appReleaseNotes === 'string')
+      changes.appReleaseNotes = changes.appReleaseNotes.trim() || null;
+    // Mise à jour critique : obligatoire pour toute version plus ancienne que la dernière.
+    const next = { ...before, ...changes };
+    if (next.appUpdateImportance === 'critical') {
+      if (!next.latestAppVersion)
+        throw badRequest(
+          'LATEST_VERSION_REQUIRED',
+          'Indiquez la dernière version publiée pour rendre la mise à jour obligatoire',
+        );
+      if (
+        !next.minAppVersion ||
+        compareVersions(next.minAppVersion, next.latestAppVersion) < 0
+      )
+        changes.minAppVersion = next.latestAppVersion;
+    }
     if (Object.keys(changes).length)
       await this.db.manager.update(PlatformSettings, { id: 1 }, changes);
+    this.db.afterCommit(() => this.appVersions.invalidate());
     // Quotas de l'essai : relus par toutes les structures.
     this.db.afterCommit(() => this.subscriptions.invalidateAll());
     await this.log(admin, 'settings.update', null, {

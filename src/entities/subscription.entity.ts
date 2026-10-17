@@ -15,6 +15,9 @@ import {
 } from 'typeorm';
 
 /** Formule du catalogue (commune à toutes les structures). */
+/** mineure : bandeau discret ; recommandée : fenêtre à l'ouverture ; critique : obligatoire */
+export type AppUpdateImportance = 'minor' | 'recommended' | 'critical';
+
 @Entity('plans')
 export class Plan {
   @PrimaryColumn({ type: 'text' })
@@ -94,6 +97,14 @@ export class PlatformSettings {
   /** Dernière version publiée : mise à jour proposée */
   @Column({ name: 'latest_app_version', type: 'text', nullable: true })
   latestAppVersion: string | null;
+
+  /** Importance de la dernière version : bandeau, fenêtre à l'ouverture, ou obligatoire */
+  @Column({ name: 'app_update_importance', type: 'text', default: 'minor' })
+  appUpdateImportance: AppUpdateImportance;
+
+  /** Nouveautés de la dernière version, montrées dans la fenêtre de mise à jour */
+  @Column({ name: 'app_release_notes', type: 'text', nullable: true })
+  appReleaseNotes: string | null;
 
   @Column({ name: 'android_store_url', type: 'text', nullable: true })
   androidStoreUrl: string | null;
