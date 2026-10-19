@@ -47,6 +47,7 @@ export async function ownerDataSource(): Promise<DataSource> {
 
 export async function resetDatabase(app: INestApplication, owner: DataSource) {
   await owner.query(`TRUNCATE tenants, audit_logs CASCADE`);
+  await owner.query(`TRUNCATE client_presentations`);
   await owner.query(`TRUNCATE demo_requests, landing_assets, doc_articles`);
   await owner.query(`TRUNCATE app_onboarding_slides`);
   await owner.query(

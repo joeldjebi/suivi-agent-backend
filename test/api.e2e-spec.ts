@@ -12,6 +12,7 @@ import { App } from 'supertest/types';
 import ExcelJS from 'exceljs';
 import { DataSource } from 'typeorm';
 import { RealtimeService } from '../src/common/realtime.service';
+import { RedisService } from '../src/common/redis.service';
 import { DEFAULT_LANDING } from '../src/landing/landing.defaults';
 import { randomUUID } from 'node:crypto';
 import { hashPassword } from '../src/auth/auth.service';
@@ -10071,5 +10072,289 @@ describe('Produits concurrents signalés depuis le terrain', () => {
       'product.suggestion_rejected',
       'product.suggestion_accepted',
     ]);
+  });
+});
+
+describe('Présentations clients (console éditeur)', () => {
+  it('pré-remplissage, enregistrement, lien de partage, retrait et suppression', async () => {
+    const email = uniqueEmail('sa-pres');
+    await owner.query(
+      `INSERT INTO platform_admins (email, password_hash, first_name, last_name) VALUES ($1, $2, 'Joël', 'Ventes')`,
+      [email, await hashPassword('Editeur2026!')],
+    );
+    const res = await new Api(app)
+      .post('/platform/auth/login', { email, password: 'Editeur2026!' })
+      .expect(200);
+    const sa = new Api(app, res.body.accessToken as string);
+
+    // Sans structure : contacts d'assistance du site, présentateur connecté.
+    const blank = (await sa.get('/platform/presentations/defaults').expect(200))
+      .body as Body;
+    expect(blank).toMatchObject({
+      clientName: '',
+      presenter: 'Joël',
+      supportEmail: DEFAULT_LANDING.footer.emails[0] ?? '',
+      modules: { missions: true, outlets: true, orders: true, pay: true },
+    });
+
+    // Avec une structure existante : nom, zones, effectifs, fonctions de sa formule.
+    const t = await newTenant(app, 'Moyoo Pro');
+    await t.createZone('Plateau', PLATEAU);
+    await t.createZone('Cocody', COCODY);
+    await t.createUser('agent');
+    await t.createUser('agent');
+    await t.createUser('team_lead');
+    const filled = (
+      await sa
+        .get(`/platform/presentations/defaults?tenantId=${t.tenantId}`)
+        .expect(200)
+    ).body as Body;
+    const { features } = await app
+      .get(SubscriptionsService)
+      .summary(t.tenantId);
+    expect(filled).toMatchObject({
+      clientName: 'Moyoo Pro',
+      areas: ['Cocody', 'Plateau'],
+      agents: 2,
+      leads: 1,
+      color: '#2563EB',
+      // Fonctions de la formule de la structure.
+      modules: {
+        missions: features.includes('missions'),
+        outlets: features.includes('points_of_sale'),
+        orders: features.includes('orders'),
+        pay: features.includes('payroll'),
+      },
+    });
+    await sa
+      .get(`/platform/presentations/defaults?tenantId=${randomUUID()}`)
+      .expect(404);
+
+    // Contenu vérifié champ par champ.
+    const content = {
+      ...filled,
+      trade: 'distribution de boissons',
+      products: ['Eau Cascade 1,5 L'],
+      meetingDate: '2026-10-24',
+    };
+    await sa
+      .post('/platform/presentations', {
+        content: { ...content, color: 'bleu' },
+      })
+      .expect(400);
+    await sa
+      .post('/platform/presentations', {
+        content: { ...content, areas: Array(13).fill('Zone') },
+      })
+      .expect(400);
+    await sa
+      .post('/platform/presentations', {
+        content: { ...content, modules: { missions: true } },
+      })
+      .expect(400);
+
+    const created = (
+      await sa
+        .post('/platform/presentations', { content, tenantId: t.tenantId })
+        .expect(201)
+    ).body as Body;
+    expect(created).toMatchObject({
+      tenantName: 'Moyoo Pro',
+      shareToken: null,
+      viewCount: 0,
+      createdByName: 'Joël Ventes',
+      content: { clientName: 'Moyoo Pro', meetingDate: '2026-10-24' },
+    });
+    const id = created.id as string;
+    const list = (await sa.get('/platform/presentations').expect(200))
+      .body as Body[];
+    expect(list.map((p) => p.id)).toEqual([id]);
+
+    const updated = (
+      await sa
+        .patch(`/platform/presentations/${id}`, {
+          content: { ...content, trade: 'distribution alimentaire' },
+        })
+        .expect(200)
+    ).body as Body;
+    // Structure inchangée quand elle n'est pas donnée.
+    expect(updated).toMatchObject({
+      tenantId: t.tenantId,
+      content: { trade: 'distribution alimentaire' },
+    });
+
+    // Lien de partage : le même tant qu'il n'est pas retiré, ouvert sans compte.
+    const shared = (
+      await sa.post(`/platform/presentations/${id}/share`).expect(200)
+    ).body as Body;
+    const token = shared.shareToken as string;
+    expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(
+      (await sa.post(`/platform/presentations/${id}/share`).expect(200)).body
+        .shareToken,
+    ).toBe(token);
+    const opened = (
+      await new Api(app).get(`/public/presentations/${token}`).expect(200)
+    ).body as Body;
+    expect(opened.content).toMatchObject({
+      clientName: 'Moyoo Pro',
+      trade: 'distribution alimentaire',
+    });
+    expect(Object.keys(opened).sort()).toEqual(['content', 'updatedAt']);
+    expect(
+      (await sa.get(`/platform/presentations/${id}`).expect(200)).body
+        .viewCount,
+    ).toBe(1);
+    await new Api(app).get('/public/presentations/nimporte-quoi').expect(404);
+
+    // Lien retiré : l'ancien ne fonctionne plus.
+    await sa.delete(`/platform/presentations/${id}/share`).expect(200);
+    await new Api(app).get(`/public/presentations/${token}`).expect(404);
+
+    // Réservé à l'éditeur, et tracé dans son journal.
+    await t.admin.api.get('/platform/presentations').expect(401);
+    await new Api(app).get('/platform/presentations').expect(401);
+    const actions = await owner.query<{ action: string }[]>(
+      `SELECT action FROM platform_audit WHERE action LIKE 'presentation.%' ORDER BY created_at`,
+    );
+    expect(actions.map((a) => a.action)).toEqual([
+      'presentation.create',
+      'presentation.share',
+      'presentation.unshare',
+    ]);
+
+    await sa.delete(`/platform/presentations/${id}`).expect(204);
+    await sa.get(`/platform/presentations/${id}`).expect(404);
+  });
+});
+
+describe('Structure de démo d’une présentation', () => {
+  it('créée en un clic avec les informations du client, activité comprise ; mot de passe renouvelé ; supprimée', async () => {
+    const email = uniqueEmail('sa-demo');
+    await owner.query(
+      `INSERT INTO platform_admins (email, password_hash, first_name, last_name) VALUES ($1, $2, 'Joël', 'Démo')`,
+      [email, await hashPassword('Editeur2026!')],
+    );
+    const res = await new Api(app)
+      .post('/platform/auth/login', { email, password: 'Editeur2026!' })
+      .expect(200);
+    const sa = new Api(app, res.body.accessToken as string);
+    const defaults = (
+      await sa.get('/platform/presentations/defaults').expect(200)
+    ).body as Body;
+    const created = (
+      await sa
+        .post('/platform/presentations', {
+          content: {
+            ...defaults,
+            clientName: 'Moyoo Pro',
+            areas: ['Plateau', 'Cocody', 'Quartier des Palmiers'],
+            agents: 6,
+            leads: 2,
+            agentName: 'Moussa',
+            products: ['Eau Cascade 1,5 L', 'Tonic Royal 33 cl'],
+            color: '#0F766E',
+          },
+        })
+        .expect(201)
+    ).body as Body;
+    const id = created.id as string;
+    await sa.get(`/platform/presentations/${id}/demo`).expect(404);
+
+    const demo = (
+      await sa.post(`/platform/presentations/${id}/demo`).expect(201)
+    ).body as Body;
+    const tenantId = demo.presentation.demoTenantId as string;
+    expect(demo.presentation).toMatchObject({
+      demoTenantName: 'Moyoo Pro · Démo',
+      demoAdminEmail: demo.accounts[0].email,
+    });
+    expect(demo.password).toMatch(/^Demo-[0-9a-f]{6}-\d{3}$/);
+    const roles = (demo.accounts as Body[]).map((a) => a.role);
+    expect(roles.filter((r) => r === 'team_lead')).toHaveLength(2);
+    expect(roles.filter((r) => r === 'agent')).toHaveLength(6);
+    expect(demo.accounts[3]).toMatchObject({
+      role: 'agent',
+      name: 'Moussa Brou',
+    });
+    expect(demo.activity.zones).toBe(3);
+    expect(demo.activity.positions).toBeGreaterThan(100);
+    expect(demo.activity.submissions).toBeGreaterThan(0);
+
+    // L'administrateur de la démo se connecte : ses quartiers, sa couleur, ses produits.
+    const admin = await new Api(app)
+      .post('/auth/login', {
+        email: demo.accounts[0].email,
+        password: demo.password,
+      })
+      .expect(200);
+    const api = new Api(app, admin.body.accessToken as string);
+    const zones = (await api.get('/zones').expect(200)).body as Body[];
+    expect(zones.map((z) => z.name).sort()).toEqual([
+      'Cocody',
+      'Plateau',
+      'Quartier des Palmiers',
+    ]);
+    const [branding] = await owner.query<{ primary_color: string }[]>(
+      `SELECT primary_color FROM tenant_branding WHERE tenant_id = $1`,
+      [tenantId],
+    );
+    expect(branding.primary_color).toBe('#0F766E');
+    const products = await owner.query<{ name: string }[]>(
+      `SELECT name FROM products WHERE tenant_id = $1 ORDER BY name`,
+      [tenantId],
+    );
+    expect(products.map((p) => p.name)).toEqual([
+      'Eau Cascade 1,5 L',
+      'Tonic Royal 33 cl',
+    ]);
+    // Journée en cours : des agents sur la carte en direct.
+    const [{ open }] = await owner.query<{ open: number }[]>(
+      `SELECT count(*)::int AS open FROM work_days WHERE tenant_id = $1 AND status IN ('active', 'paused')`,
+      [tenantId],
+    );
+    expect(open).toBeGreaterThanOrEqual(3);
+    const redis = app.get(RedisService).client;
+    expect(await redis.hlen(`live:${tenantId}`)).toBe(open);
+
+    // Une seule démo par présentation ; ses comptes sans mot de passe.
+    await sa.post(`/platform/presentations/${id}/demo`).expect(409);
+    const accounts = (
+      await sa.get(`/platform/presentations/${id}/demo`).expect(200)
+    ).body as Body;
+    expect(accounts.accounts).toHaveLength(9);
+    expect(JSON.stringify(accounts)).not.toContain('password');
+
+    // Nouveau mot de passe : l'ancien ne marche plus.
+    const reset = (
+      await sa.post(`/platform/presentations/${id}/demo/password`).expect(200)
+    ).body as Body;
+    expect(reset.password).not.toBe(demo.password);
+    await new Api(app)
+      .post('/auth/login', {
+        email: demo.accounts[0].email,
+        password: demo.password,
+      })
+      .expect(401);
+    await new Api(app)
+      .post('/auth/login', {
+        email: demo.accounts[4].email,
+        password: reset.password,
+      })
+      .expect(200);
+
+    // Suppression : la structure et ses données disparaissent.
+    const removed = (
+      await sa.delete(`/platform/presentations/${id}/demo`).expect(200)
+    ).body as Body;
+    expect(removed.demoTenantId).toBeNull();
+    const [gone] = await owner.query<unknown[]>(
+      `SELECT 1 FROM tenants WHERE id = $1`,
+      [tenantId],
+    );
+    expect(gone).toBeUndefined();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(await redis.exists(`live:${tenantId}`)).toBe(0);
+    await sa.delete(`/platform/presentations/${id}/demo`).expect(404);
   });
 });

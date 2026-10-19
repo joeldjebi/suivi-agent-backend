@@ -47,6 +47,7 @@ import { RealtimeModule } from './realtime/realtime.module';
 import { PayrollModule } from './payroll/payroll.module';
 import { PlatformModule } from './platform/platform.module';
 import { LandingModule } from './landing/landing.module';
+import { PresentationsModule } from './presentations/presentations.module';
 import { SettingsModule } from './settings/settings.module';
 import { StatsModule } from './stats/stats.module';
 import { SubscriptionGuard } from './subscriptions/subscription.guard';
@@ -114,6 +115,7 @@ import { RateLimitGuard } from './common/rate-limit';
     PayrollModule,
     PlatformModule,
     LandingModule,
+    PresentationsModule,
     BrandingModule,
     RealtimeModule,
     JobsModule,
