@@ -13,6 +13,7 @@ import {
 } from '../common/business.exception';
 import { APP_LOGIN, LoginThrottle } from '../common/login-throttle';
 import { DbService } from '../common/db.service';
+import { RedisService } from '../common/redis.service';
 import { effectiveSettings } from '../common/access.service';
 import { SessionRevocationService } from '../common/session-revocation.service';
 import { cleanImage, imageMime } from '../common/image';
@@ -55,6 +56,11 @@ export const MAX_AVATAR_BYTES = 1024 * 1024;
 export const hashPassword = (password: string) =>
   bcrypt.hash(password, BCRYPT_ROUNDS);
 
+/** Clé Redis des renouvellements récents (empreinte de l'ancien jeton → jetons remis). */
+const ROTATED = 'auth:rotated:';
+/** Délai pendant lequel l'ancien jeton peut être présenté de nouveau (requête interrompue). */
+const ROTATION_GRACE_SECONDS = 30;
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -65,6 +71,7 @@ export class AuthService {
     private readonly subscriptions: SubscriptionsService,
     private readonly access: AccessService,
     private readonly throttle: LoginThrottle,
+    private readonly redis: RedisService,
   ) {}
 
   /** Inscription d'une structure : création de son espace et de son administrateur. */
@@ -163,11 +170,14 @@ export class AuthService {
   /** Rotation : l'ancien jeton de rafraîchissement est révoqué à chaque utilisation. */
   async refresh(refreshToken: string): Promise<TokensDto> {
     const m = this.db.manager;
+    const hash = hashToken(refreshToken);
     const stored = await m.findOneBy(RefreshToken, {
-      tokenHash: hashToken(refreshToken),
+      tokenHash: hash,
       revokedAt: IsNull(),
     });
     if (!stored || stored.expiresAt < new Date()) {
+      const replay = await this.replayRotation(hash);
+      if (replay) return replay;
       throw new BusinessException(
         HttpStatus.UNAUTHORIZED,
         'INVALID_REFRESH_TOKEN',
@@ -177,7 +187,37 @@ export class AuthService {
     const user = await m.findOneBy(User, { id: stored.userId });
     if (!user?.isActive) throw invalidCredentials();
     await m.update(RefreshToken, { id: stored.id }, { revokedAt: new Date() });
-    return this.issueTokens(user);
+    const tokens = await this.issueTokens(user);
+    // Réponse perdue (page rechargée pendant le renouvellement) : l'ancien jeton, présenté
+    // de nouveau peu après, reçoit les mêmes jetons au lieu de déconnecter l'utilisateur.
+    this.db.afterCommit(() => {
+      void this.redis.client
+        .set(
+          `${ROTATED}${hash}`,
+          JSON.stringify(tokens),
+          'EX',
+          ROTATION_GRACE_SECONDS,
+        )
+        .catch(() => undefined);
+    });
+    return tokens;
+  }
+
+  /** Jetons remis lors d'un renouvellement récent, s'ils sont toujours valables. */
+  private async replayRotation(hash: string): Promise<TokensDto | null> {
+    const raw = await this.redis.client
+      .get(`${ROTATED}${hash}`)
+      .catch(() => null);
+    if (!raw) return null;
+    const tokens = JSON.parse(raw) as TokensDto;
+    // Déconnexion, nouveau renouvellement, compte désactivé : plus rien à rejouer.
+    const issued = await this.db.manager.findOneBy(RefreshToken, {
+      tokenHash: hashToken(tokens.refreshToken),
+      revokedAt: IsNull(),
+    });
+    if (!issued) return null;
+    const user = await this.db.manager.findOneBy(User, { id: issued.userId });
+    return user?.isActive ? tokens : null;
   }
 
   async logout(refreshToken: string): Promise<void> {

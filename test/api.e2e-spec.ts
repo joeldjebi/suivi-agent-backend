@@ -129,14 +129,30 @@ describe('Authentification', () => {
       .post('/auth/refresh', { refreshToken: loginRes.body.refreshToken })
       .expect(200);
     expect(refreshed.body.refreshToken).not.toBe(loginRes.body.refreshToken);
-    // L'ancien jeton de rafraîchissement a été révoqué par la rotation.
+    // Réponse perdue (page rechargée pendant le renouvellement) : l'ancien jeton, présenté
+    // de nouveau aussitôt, reçoit les mêmes jetons au lieu de couper la session.
+    const replayed = await new Api(app)
+      .post('/auth/refresh', { refreshToken: loginRes.body.refreshToken })
+      .expect(200);
+    expect(replayed.body.refreshToken).toBe(refreshed.body.refreshToken);
+    // Passé le délai de grâce, l'ancien jeton est refusé.
+    const redis = app.get(RedisService).client;
+    const graced = await redis.keys('auth:rotated:*');
+    await redis.del(...graced);
     await new Api(app)
       .post('/auth/refresh', { refreshToken: loginRes.body.refreshToken })
       .expect(401);
 
+    // Après une déconnexion, ni le jeton ni son prédécesseur ne rouvrent la session.
+    const second = await new Api(app)
+      .post('/auth/refresh', { refreshToken: refreshed.body.refreshToken })
+      .expect(200);
     await new Api(app)
-      .post('/auth/logout', { refreshToken: refreshed.body.refreshToken })
+      .post('/auth/logout', { refreshToken: second.body.refreshToken })
       .expect(204);
+    await new Api(app)
+      .post('/auth/refresh', { refreshToken: second.body.refreshToken })
+      .expect(401);
     await new Api(app)
       .post('/auth/refresh', { refreshToken: refreshed.body.refreshToken })
       .expect(401);
