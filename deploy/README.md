@@ -145,3 +145,21 @@ passe (celui d'Apache, puis le compte pgAdmin). pgAdmin n'écoute que sur 127.0.
 Changer le mot de passe Apache : `htpasswd -B /etc/apache2/performx-db.htpasswd performx`.
 Désactiver : retirer `COMPOSE_PROFILES`, `docker compose -f docker-compose.prod.yml stop pgadmin`,
 puis relancer `sh cpanel/install.sh performx performx.online` sans l'adresse.
+
+## Version web de l'app (app.performx.online, facultative)
+
+Le même code que l'app mobile, compilé pour le navigateur (agents et chefs d'équipe). Sur le
+web, la position n'est suivie que tant que la page est ouverte : l'app mobile reste
+nécessaire pour le suivi écran éteint.
+
+1. DNS : enregistrement **A** `app` vers l'adresse du serveur.
+2. cPanel (compte `performx`) → *Domains* → *Create A New Domain* : `app.performx.online`,
+   puis WHM → *Manage AutoSSL* → `performx` → *Check* (certificat du sous-domaine).
+3. Code de l'app à côté des deux autres dépôts :
+   `cd /opt/suivi-agent && git clone https://github.com/joeldjebi/suivi-agent-app-mobile.git`
+4. Dans `.env` : ajouter `webapp` à `COMPOSE_PROFILES` (ex. `COMPOSE_PROFILES=dbadmin,webapp`).
+5. `docker compose -f docker-compose.prod.yml up -d --build app` (première construction :
+   quelques minutes, image Flutter).
+6. `sh cpanel/install-app.sh performx app.performx.online`
+
+Mise à jour : `cd /opt/suivi-agent/suivi-agent-app-mobile && git pull`, puis l'étape 5.

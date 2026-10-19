@@ -84,6 +84,23 @@ services:
     depends_on:
       - api
 
+  # Version web de l'app mobile (app.performx.online), facultative : COMPOSE_PROFILES=webapp
+  # dans .env, et le dépôt suivi-agent-app-mobile cloné à côté des deux autres.
+  app:
+    build:
+      context: ../../suivi-agent-app-mobile
+      dockerfile: Dockerfile.web
+      args:
+        SENTRY_DSN: ${APP_SENTRY_DSN:-}
+    profiles: ["webapp"]
+    restart: unless-stopped
+    logging: *logging
+    ports:
+      # 127.0.0.1 : joignable seulement par Apache sur ce serveur.
+      - "127.0.0.1:${APP_PORT:-8092}:80"
+    depends_on:
+      - api
+
   # Sauvegarde de la base chaque nuit (2 h), vérifiée, gardée 14 jours, hors du dossier du
   # code : /opt/suivi-agent/backups. Restauration : sh restore.sh <fichier>.
   backup:
