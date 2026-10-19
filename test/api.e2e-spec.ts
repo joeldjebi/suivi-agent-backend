@@ -970,7 +970,15 @@ describe('Missions de visites de points de vente', () => {
         .expect(201)
     ).body as { id: string };
     await agent.api.post('/zone-requests', { zoneId: plateau.id }).expect(201);
-    await agent.api.post('/days/start').expect(200);
+    // Journée démarrée depuis la version web : le support est gardé avec la journée.
+    const started = (
+      await agent.api.post('/days/start').set('X-App-Client', 'web').expect(200)
+    ).body as { id: string };
+    const [{ client }] = await owner.query<{ client: string }[]>(
+      `SELECT client FROM work_days WHERE id = $1`,
+      [started.id],
+    );
+    expect(client).toBe('web');
     const visit = (
       missionId: string,
       body: object,
@@ -6426,6 +6434,18 @@ describe('Alertes intelligentes des responsables', () => {
     );
     await jobs.everyMinute();
     expect(await alertTypes(lead.api)).toContain('signal_lost');
+    // Journée démarrée depuis le web : le navigateur coupe le GPS écran éteint, l'alerte le dit.
+    const [lost] = (await lead.api.get('/alerts?type=signal_lost').expect(200))
+      .body as Body[];
+    expect(lost.data.web).toBeUndefined();
+    await owner.query(`UPDATE work_days SET client = 'web' WHERE id = $1`, [
+      day.id,
+    ]);
+    await owner.query(`DELETE FROM agent_alerts WHERE id = $1`, [lost.id]);
+    await jobs.everyMinute();
+    const [web] = (await lead.api.get('/alerts?type=signal_lost').expect(200))
+      .body as Body[];
+    expect(web.data.web).toBe(true);
     await send(point(new Date(), moved, { batteryLevel: 0.5 }));
     await jobs.everyMinute();
     expect(await alertTypes(lead.api)).not.toContain('signal_lost');

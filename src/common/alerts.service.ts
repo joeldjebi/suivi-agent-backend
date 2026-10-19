@@ -261,11 +261,12 @@ export class AlertsService {
         lastAt: Date | null;
         battery: number | null;
         mocked: boolean;
+        client: string | null;
       }[]
     >(
       `SELECT d.id AS "dayId", d.status, d.started_at AS "startedAt", u.id AS "agentId",
               u.first_name AS "firstName", u.last_name AS "lastName", u.group_id AS "groupId",
-              last.recorded_at AS "lastAt", last.battery_level AS battery,
+              d.client, last.recorded_at AS "lastAt", last.battery_level AS battery,
               EXISTS (SELECT 1 FROM positions p WHERE p.day_id = d.id AND p.is_mocked) AS mocked
        FROM work_days d
        JOIN users u ON u.id = d.agent_id
@@ -299,6 +300,8 @@ export class AlertsService {
       if (lost)
         await this.open(agent, AlertType.SignalLost, r.dayId, {
           lastPositionAt: r.lastAt ? new Date(r.lastAt).toISOString() : null,
+          // Version web : le navigateur coupe le GPS dès que la page n'est plus devant.
+          ...(r.client === 'web' ? { web: true } : {}),
         });
       else await this.resolve(agent.id, AlertType.SignalLost, now);
 
@@ -521,7 +524,9 @@ export class AlertsService {
 function describe(type: AlertType, data: Record<string, unknown>): string {
   switch (type) {
     case AlertType.SignalLost:
-      return 'Plus aucune position : GPS coupé, application fermée ou réseau absent.';
+      return data.web
+        ? 'Plus aucune position : version web fermée, en arrière-plan ou écran éteint.'
+        : 'Plus aucune position : GPS coupé, application fermée ou réseau absent.';
     case AlertType.Immobile: {
       const minutes = Math.max(
         1,

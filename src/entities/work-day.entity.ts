@@ -8,6 +8,17 @@ import {
 } from 'typeorm';
 import { DayPause } from './day-pause.entity';
 
+/** App mobile (iPhone, Android) ou version web dans le navigateur. */
+export type DayClient = 'web' | 'ios' | 'android';
+
+/** Support annoncé par l'app : en-tête X-App-Client (web) ou X-App-Platform (mobile). */
+export function dayClient(header: string | undefined): DayClient | null {
+  const value = header?.toLowerCase();
+  return value === 'web' || value === 'ios' || value === 'android'
+    ? value
+    : null;
+}
+
 @Entity('work_days')
 export class WorkDay {
   @PrimaryGeneratedColumn('uuid')
@@ -36,6 +47,10 @@ export class WorkDay {
 
   @Column({ name: 'end_reason', type: 'text', nullable: true })
   endReason: DayEndReason | null;
+
+  /** Support utilisé pour démarrer (ou reprendre) la journée */
+  @Column({ type: 'text', nullable: true })
+  client: DayClient | null;
 
   @OneToMany(() => DayPause, (pause) => pause.day)
   pauses?: DayPause[];

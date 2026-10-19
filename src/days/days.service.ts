@@ -18,6 +18,7 @@ import { AlertsService } from '../common/alerts.service';
 import { workDate } from '../common/time.util';
 import { toInfo, ZoneExitsService } from '../common/zone-exits.service';
 import { DayPause, User, WorkDay, ZoneRequest } from '../entities';
+import type { DayClient } from '../entities/work-day.entity';
 import { LiveService } from '../positions/live.service';
 import { statusRooms } from '../positions/positions.service';
 import { ZoneRequestsService } from '../zone-requests/zone-requests.service';
@@ -72,7 +73,7 @@ export class DaysService {
   }
 
   /** Démarrer la journée (RG-10, RG-25 à RG-27). */
-  async start(user: AuthUser) {
+  async start(user: AuthUser, client: DayClient | null = null) {
     const m = this.db.manager;
     const settings = await this.access.settings();
     const agent = await this.access.getAgent(user.id);
@@ -115,6 +116,7 @@ export class DaysService {
           endedAt: null,
           endReason: null,
           zoneId: zoneId ?? ended.zoneId,
+          client: client ?? ended.client,
         },
       );
       const day = await this.get(ended.id);
@@ -128,6 +130,7 @@ export class DaysService {
       status: DayStatus.Active,
       workDate: workDate(now, settings.timezone, settings.dailyResetTime),
       startedAt: now,
+      client,
     });
     await this.alerts.resolve(agent.id, AlertType.LateStart, now);
     this.emitStatus(agent, saved);

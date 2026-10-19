@@ -1,6 +1,7 @@
 import {
   Controller,
   Get,
+  Headers,
   HttpCode,
   Param,
   ParseUUIDPipe,
@@ -13,6 +14,7 @@ import type { AuthUser } from '../common/auth-user';
 import { CurrentUser, Roles } from '../common/decorators';
 import { DayHistoryQuery } from './days.dto';
 import { DaysService } from './days.service';
+import { dayClient } from '../entities/work-day.entity';
 
 @ApiTags('Journées')
 @ApiBearerAuth()
@@ -30,8 +32,12 @@ export class DaysController {
   @Roles(Role.Agent)
   @Post('start')
   @HttpCode(200)
-  start(@CurrentUser() user: AuthUser) {
-    return this.days.start(user);
+  start(
+    @CurrentUser() user: AuthUser,
+    @Headers('x-app-client') client?: string,
+    @Headers('x-app-platform') platform?: string,
+  ) {
+    return this.days.start(user, dayClient(client ?? platform));
   }
 
   @Roles(Role.Agent)
