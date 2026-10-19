@@ -31,6 +31,7 @@ import {
   UpdateProductDto,
 } from './products.dto';
 import { ProductsService } from './products.service';
+import { RateLimit } from '../common/rate-limit';
 
 /** Catalogue de produits : formules qui incluent les relevés produits ou la prise de commande. */
 @ApiTags('Produits')
@@ -64,6 +65,7 @@ export class ProductsController {
 
   /** Import Excel (.xlsx) ou CSV : les lignes écartées sont renvoyées avec leur motif. */
   @Roles(Role.Admin)
+  @RateLimit(10, 600)
   @Post('import')
   @ApiConsumes('multipart/form-data')
   @ApiBody({

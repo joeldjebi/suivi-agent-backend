@@ -261,13 +261,16 @@ export class AlertsService {
         lastAt: Date | null;
         battery: number | null;
         mocked: boolean;
+        suspect: { reason: string; distanceM: number; seconds: number } | null;
         client: string | null;
       }[]
     >(
       `SELECT d.id AS "dayId", d.status, d.started_at AS "startedAt", u.id AS "agentId",
               u.first_name AS "firstName", u.last_name AS "lastName", u.group_id AS "groupId",
               d.client, last.recorded_at AS "lastAt", last.battery_level AS battery,
-              EXISTS (SELECT 1 FROM positions p WHERE p.day_id = d.id AND p.is_mocked) AS mocked
+              EXISTS (SELECT 1 FROM positions p WHERE p.day_id = d.id AND p.is_mocked) AS mocked,
+              (SELECT p.suspect FROM positions p WHERE p.day_id = d.id AND p.suspect IS NOT NULL
+               ORDER BY p.recorded_at LIMIT 1) AS suspect
        FROM work_days d
        JOIN users u ON u.id = d.agent_id
        LEFT JOIN LATERAL (
@@ -325,9 +328,15 @@ export class AlertsService {
           await this.resolve(agent.id, AlertType.LowBattery, now);
       }
 
-      // Fausse position : jusqu'à la fin de la journée.
-      if (settings.alertMocked && r.mocked)
-        await this.open(agent, AlertType.Mocked, r.dayId, {});
+      // Fausse position (signalée par le téléphone, ou déplacement impossible repéré par le
+      // serveur) : jusqu'à la fin de la journée.
+      if (settings.alertMocked && (r.mocked || r.suspect))
+        await this.open(
+          agent,
+          AlertType.Mocked,
+          r.dayId,
+          r.mocked || !r.suspect ? {} : { ...r.suspect },
+        );
     }
   }
 
@@ -537,7 +546,9 @@ function describe(type: AlertType, data: Record<string, unknown>): string {
     case AlertType.LowBattery:
       return `Batterie à ${String(data.percent)} % : le suivi risque de s’arrêter.`;
     case AlertType.Mocked:
-      return 'Une application de fausse position GPS est utilisée.';
+      return data.reason === 'teleport'
+        ? `Position suspecte : ${Math.round(Number(data.distanceM) / 100) / 10} km parcourus en ${String(data.seconds)} s, un déplacement impossible.`
+        : 'Une application de fausse position GPS est utilisée.';
     case AlertType.OutOfZone:
       return 'Hors de sa zone au-delà du délai d’alerte.';
     case AlertType.LateStart:

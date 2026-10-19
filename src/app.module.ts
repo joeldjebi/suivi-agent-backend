@@ -55,6 +55,7 @@ import { TeamLeadsModule } from './team-leads/team-leads.module';
 import { UsersModule } from './users/users.module';
 import { ZoneRequestsModule } from './zone-requests/zone-requests.module';
 import { ZonesModule } from './zones/zones.module';
+import { RateLimitGuard } from './common/rate-limit';
 
 @Module({
   imports: [
@@ -121,6 +122,8 @@ import { ZonesModule } from './zones/zones.module';
   providers: [
     AppService,
     // Avant tout : une app trop ancienne est invitée à se mettre à jour.
+    // Robots et scripts : plafond de requêtes par adresse IP, avant tout le reste.
+    { provide: APP_GUARD, useClass: RateLimitGuard },
     { provide: APP_GUARD, useExisting: AppVersionGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },

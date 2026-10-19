@@ -15,7 +15,7 @@ import { APP_LOGIN, LoginThrottle } from '../common/login-throttle';
 import { DbService } from '../common/db.service';
 import { effectiveSettings } from '../common/access.service';
 import { SessionRevocationService } from '../common/session-revocation.service';
-import { imageMime } from '../common/image';
+import { cleanImage, imageMime } from '../common/image';
 import { normalizePhone } from '../common/phone';
 import { workDate } from '../common/time.util';
 import {
@@ -155,7 +155,7 @@ export class AuthService {
       await this.throttle.fail(APP_LOGIN, ip ?? '', account);
       throw invalidCredentials();
     }
-    await this.throttle.reset(APP_LOGIN, account);
+    await this.throttle.reset(APP_LOGIN, account, ip ?? '');
     await m.insert(AuditLog, entry);
     return this.issueTokens(user);
   }
@@ -272,7 +272,7 @@ export class AuthService {
       `UPDATE users SET avatar = $2, avatar_mime = $3,
               avatar_version = coalesce(avatar_version, 0) + 1
        WHERE id = $1`,
-      [user.id, file.buffer, mime],
+      [user.id, await cleanImage(file.buffer, mime), mime],
     );
     return this.me(user);
   }

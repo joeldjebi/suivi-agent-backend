@@ -163,3 +163,14 @@ nécessaire pour le suivi écran éteint.
 6. `sh cpanel/install-app.sh performx app.performx.online`
 
 Mise à jour : `cd /opt/suivi-agent/suivi-agent-app-mobile && git pull`, puis l'étape 5.
+
+## Distribution directe de l'app (en attendant les stores)
+
+Page publique : `https://performx.online/telecharger` (lien en bas du site). Ses boutons
+suivent les liens réglés dans la console éditeur (Réglages → Application mobile).
+
+- **Android (APK)** : construire `flutter build apk --release` (dossier de l'app mobile),
+  copier le fichier sur le serveur dans `/opt/suivi-agent/downloads/performx.apk`, puis
+  régler le lien Android sur `https://performx.online/downloads/performx.apk`.
+- **iPhone (TestFlight)** : App Store Connect → TestFlight → *Testeurs externes* → lien
+  public ; le coller comme lien iPhone.

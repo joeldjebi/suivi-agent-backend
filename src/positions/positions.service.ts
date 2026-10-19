@@ -11,6 +11,7 @@ import { toInfo, ZoneExitsService } from '../common/zone-exits.service';
 import { AgentAlert, DayPause, User, WorkDay } from '../entities';
 import { LiveService } from './live.service';
 import { BatchResultDto, LiveQuery, PositionBatchDto } from './positions.dto';
+import { findTeleports } from './suspect';
 
 /** Tolérance sur l'horloge du téléphone. */
 const CLOCK_SKEW_MS = 5 * 60_000;
@@ -90,6 +91,7 @@ export class PositionsService {
     if (inserted.length && day.status !== DayStatus.Ended) {
       await this.publishLatest(user.id, day, inserted);
     }
+    await this.markTeleports(user.id, day.id, inserted);
     // Sorties de zone, y compris pour des points reçus après coup (coupure réseau).
     await this.zoneExits.track(
       day,
@@ -111,6 +113,49 @@ export class PositionsService {
       duplicates: valid.length - inserted.length,
       rejected,
     };
+  }
+
+  /**
+   * Déplacements impossibles (fausse position, y compris sur la version web où le téléphone
+   * ne le signale pas) : les points concernés sont marqués, l'alerte suit (scan des journées).
+   */
+  private async markTeleports(
+    agentId: string,
+    dayId: string,
+    inserted: InsertedRow[],
+  ) {
+    if (!inserted.length) return;
+    const m = this.db.manager;
+    const points = inserted.map((r) => ({
+      lat: r.lat,
+      lng: r.lng,
+      accuracy: r.accuracy,
+      recordedAt: new Date(r.recorded_at),
+    }));
+    const first = new Date(
+      Math.min(...points.map((p) => p.recordedAt.getTime())),
+    );
+    const [previous] = await m.query<
+      { lat: number; lng: number; accuracy: number | null; recordedAt: Date }[]
+    >(
+      `SELECT lat, lng, accuracy, recorded_at AS "recordedAt" FROM positions
+       WHERE day_id = $1 AND recorded_at < $2 ORDER BY recorded_at DESC LIMIT 1`,
+      [dayId, first],
+    );
+    for (const t of findTeleports(previous ?? null, points)) {
+      await m.query(
+        `UPDATE positions SET suspect = $3 WHERE agent_id = $1 AND recorded_at = $2`,
+        [
+          agentId,
+          t.recordedAt,
+          JSON.stringify({
+            reason: 'teleport',
+            distanceM: t.distanceM,
+            seconds: t.seconds,
+          }),
+        ],
+      );
+    }
   }
 
   /** Carte en temps réel : agents en journée, avec leur dernière position et leur statut. */

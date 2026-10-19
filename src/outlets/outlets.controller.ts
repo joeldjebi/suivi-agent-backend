@@ -47,6 +47,7 @@ import {
 import { OutletsService } from './outlets.service';
 import { VisitsService } from './visits.service';
 import { RejectSubmissionDto as RejectVisitDto } from '../missions/missions.dto';
+import { RateLimit } from '../common/rate-limit';
 
 const send = (res: Response, file: ExportFile) => {
   res.set({
@@ -119,6 +120,7 @@ export class OutletsController {
 
   /** Import Excel (.xlsx) ou CSV : les lignes écartées sont renvoyées avec leur motif. */
   @Roles(Role.Admin)
+  @RateLimit(10, 600)
   @Post('import')
   @ApiConsumes('multipart/form-data')
   @ApiBody({

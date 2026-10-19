@@ -13,8 +13,9 @@ export class RegisterDeviceDto {
   @MaxLength(4096)
   token: string;
 
-  @IsIn(['android', 'ios'])
-  platform: 'android' | 'ios';
+  /** web : version web de l'app (notifications du navigateur) */
+  @IsIn(['android', 'ios', 'web'])
+  platform: 'android' | 'ios' | 'web';
 
   @IsOptional()
   @IsString()

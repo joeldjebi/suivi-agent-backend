@@ -145,7 +145,7 @@ async function main() {
     await t(
       `INSERT INTO invoices (tenant_id, number, month, plan_code, billing_cycle, agents, base_price,
                              amount, currency, status, issued_at, due_at, paid_at, payment_reference)
-       SELECT $1, 'F-' || to_char(m, 'YYYYMM') || '-' || upper(left($1::text, 8)), m, 'enterprise', 'monthly',
+       SELECT $1::uuid, 'F-' || to_char(m, 'YYYYMM') || '-' || upper(left($1::text, 8)), m, 'enterprise', 'monthly',
               n, 40000, 40000, 'XOF', 'paid', m + interval '1 month', m + interval '1 month 15 days',
               m + interval '1 month 6 days', 'Orange Money ' || to_char(m, 'MMYY')
        FROM (VALUES (date_trunc('month', now()) - interval '2 months', 14),

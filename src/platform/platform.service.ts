@@ -252,7 +252,7 @@ export class PlatformService {
       );
       return { mfaRequired: true, mfaToken, expiresIn: MFA_STEP_SECONDS };
     }
-    await this.throttle.reset(PLATFORM_LOGIN, dto.email);
+    await this.throttle.reset(PLATFORM_LOGIN, dto.email, ip);
     return this.opened(admin, ip, false);
   }
 
@@ -294,7 +294,7 @@ export class PlatformService {
       await this.throttle.fail(PLATFORM_LOGIN, ip, admin.email);
       throw invalidMfaCode();
     }
-    await this.throttle.reset(PLATFORM_LOGIN, admin.email);
+    await this.throttle.reset(PLATFORM_LOGIN, admin.email, ip);
     return this.opened(admin, ip, true);
   }
 
@@ -450,8 +450,9 @@ export class PlatformService {
         'CANNOT_RESET_SELF',
         'Un autre compte éditeur doit réinitialiser votre double authentification',
       );
-    const target = await this.db.manager.findOneBy(PlatformAdmin, { id });
-    if (!target) throw notFound('Compte');
+    // Seul le propriétaire réinitialise ; le sien ne peut pas l'être par un autre compte
+    // (codes de secours, ou depuis le serveur).
+    const target = await this.manageable(admin, id);
     await this.clearMfa(id);
     await this.revocation.revoke(id);
     await this.log(admin, 'admin.mfa_reset', null, { email: target.email });
@@ -573,12 +574,12 @@ export class PlatformService {
     if (!target) throw notFound('Compte');
     if (!actor?.isOwner)
       throw forbidden(
-        'Seul le compte propriétaire peut désactiver ou supprimer un compte éditeur',
+        'Seul le compte propriétaire peut gérer les autres comptes éditeur',
       );
     if (target.isOwner)
       throw conflict(
         'OWNER_PROTECTED',
-        'Le compte propriétaire ne peut être ni désactivé ni supprimé',
+        'Le compte propriétaire est protégé : il ne peut être ni désactivé, ni supprimé, ni réinitialisé par un autre compte',
       );
     return target;
   }
@@ -591,6 +592,11 @@ export class PlatformService {
 
   async createAdmin(admin: PlatformUser, dto: CreatePlatformAdminDto) {
     const m = this.db.manager;
+    const actor = await m.findOneBy(PlatformAdmin, { id: admin.id });
+    if (!actor?.isOwner)
+      throw forbidden(
+        'Seul le compte propriétaire peut créer un compte éditeur',
+      );
     const [taken] = await m.query<unknown[]>(
       `SELECT 1 FROM platform_admins WHERE lower(email) = lower($1)`,
       [dto.email],

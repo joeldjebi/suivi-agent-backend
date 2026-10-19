@@ -67,6 +67,11 @@ function stringify(data: Record<string, unknown>): Record<string, string> {
   return out;
 }
 
+/** Adresse de la version web : ouverte au toucher d'une notification du navigateur. */
+const WEB_APP_URL = (
+  process.env.WEB_APP_URL ?? 'https://app.performx.online'
+).replace(/\/$/, '');
+
 /** Firebase Cloud Messaging (Android et iPhone, via la clé APNs du projet Firebase). */
 export class FirebaseTransport implements PushTransport {
   constructor(
@@ -104,6 +109,11 @@ export class FirebaseTransport implements PushTransport {
             payload: {
               aps: { sound: 'default', ...(category ? { category } : {}) },
             },
+          },
+          // Version web : icône de l'app, et le toucher ouvre l'app.
+          webpush: {
+            notification: { icon: `${WEB_APP_URL}/icons/Icon-192.png` },
+            fcmOptions: { link: WEB_APP_URL },
           },
         },
       });
@@ -200,7 +210,12 @@ export class PushService implements OnModuleInit {
     }
     for (const [, list] of groups) {
       const { platform, code, message } = list[0];
-      const device = platform === 'ios' ? 'iPhone' : 'Android';
+      const device =
+        platform === 'ios'
+          ? 'iPhone'
+          : platform === 'web'
+            ? 'navigateur'
+            : 'Android';
       this.logger.warn(
         `Push « ${type} » refusé pour ${list.length} ${device} sur ${total} téléphone(s) : ${code}` +
           ` — ${FAILURE_HINTS[code] ?? message}`,

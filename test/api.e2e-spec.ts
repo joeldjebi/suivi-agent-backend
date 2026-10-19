@@ -259,8 +259,8 @@ describe('Authentification', () => {
 
     // Photo de profil.
     const PNG = Buffer.from(
-      '89504e470d0a1a0a0000000d4948445200000001000000010806000000',
-      'hex',
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+      'base64',
     );
     const upload = (buffer: Buffer) =>
       request(app.getHttpServer())
@@ -730,8 +730,8 @@ describe('Points de vente', () => {
         .attach(
           'file',
           Buffer.from(
-            '89504e470d0a1a0a0000000d4948445200000001000000010806000000',
-            'hex',
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+            'base64',
           ),
           'devanture.png',
         )
@@ -970,6 +970,18 @@ describe('Missions de visites de points de vente', () => {
         .expect(201)
     ).body as { id: string };
     await agent.api.post('/zone-requests', { zoneId: plateau.id }).expect(201);
+    // Suivi continu obligatoire : pas de journée démarrée depuis le web.
+    await t.admin.api
+      .patch('/settings', { requireMobileTracking: true })
+      .expect(200);
+    await agent.api
+      .post('/days/start')
+      .set('X-App-Client', 'web')
+      .expect(403)
+      .expect((r) => expect(r.body.code).toBe('MOBILE_APP_REQUIRED'));
+    await t.admin.api
+      .patch('/settings', { requireMobileTracking: false })
+      .expect(200);
     // Journée démarrée depuis la version web : le support est gardé avec la journée.
     const started = (
       await agent.api.post('/days/start').set('X-App-Client', 'web').expect(200)
@@ -3124,7 +3136,7 @@ describe('Notifications push', () => {
         .post('/devices', { token: agentToken, platform: 'android' })
         .expect(204);
       await agent.api
-        .post('/devices', { token: agentToken, platform: 'web' })
+        .post('/devices', { token: agentToken, platform: 'windows' })
         .expect(400);
       await new Api(app)
         .post('/devices', { token: agentToken, platform: 'android' })
@@ -3616,8 +3628,8 @@ describe('Notifications de l’administrateur aux équipes', () => {
 
 describe('Formulaires avec photo et « Ma semaine »', () => {
   const PNG = Buffer.from(
-    '89504e470d0a1a0a0000000d4948445200000001000000010806000000',
-    'hex',
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+    'base64',
   );
 
   it('photo géolocalisée : envoi, rattachement au formulaire, accès et export', async () => {
@@ -5669,7 +5681,8 @@ describe("Personnalisation de l'app mobile", () => {
 
     const logo = await agent.api.get('/branding/logo').expect(200);
     expect(logo.headers['content-type']).toBe('image/png');
-    expect(Buffer.compare(logo.body as Buffer, PNG)).toBe(0);
+    // Réencodé (métadonnées retirées) : toujours un PNG.
+    expect((logo.body as Buffer).subarray(0, 8)).toEqual(PNG.subarray(0, 8));
     await new Api(app).get('/branding/logo').expect(401);
 
     await t.admin.api.delete('/branding/logo').expect(200);
@@ -6450,8 +6463,19 @@ describe('Alertes intelligentes des responsables', () => {
     await jobs.everyMinute();
     expect(await alertTypes(lead.api)).not.toContain('signal_lost');
 
+    // Déplacement impossible (≈ 6 km en 20 s) : position suspecte, même sans signal du
+    // téléphone (version web).
+    const teleportAt = Date.now() + 1000;
+    await send(point(new Date(teleportAt), moved));
+    await send(point(new Date(teleportAt + 20_000), { lat: 5.36, lng: -3.98 }));
+    await jobs.everyMinute();
+    const [suspect] = (await lead.api.get('/alerts?type=mocked').expect(200))
+      .body as Body[];
+    expect(suspect.data).toMatchObject({ reason: 'teleport', seconds: 20 });
+    expect(Number(suspect.data.distanceM)).toBeGreaterThan(5000);
+
     // Fausse position : jusqu'à la fin de la journée, qui referme tout.
-    await send(point(new Date(Date.now() + 1000), moved, { isMocked: true }));
+    await send(point(new Date(teleportAt + 40_000), moved, { isMocked: true }));
     await jobs.everyMinute();
     expect(await alertTypes(lead.api)).toEqual(['mocked']);
     await agent.api.post('/days/end').expect(200);
@@ -7685,6 +7709,14 @@ describe('Espace éditeur (super administrateur)', () => {
       [email, await hashPassword('Editeur2026!')],
     );
     saId = row.id;
+    // Compte propriétaire de l'éditeur : seul à gérer les autres comptes.
+    await owner.query(
+      `UPDATE platform_admins SET is_owner = false WHERE is_owner`,
+    );
+    await owner.query(
+      `UPDATE platform_admins SET is_owner = true WHERE id = $1`,
+      [saId],
+    );
     sa = await platformLogin(email);
   });
 
@@ -7723,6 +7755,12 @@ describe('Espace éditeur (super administrateur)', () => {
         expect(r.body.code).toBe('TOO_MANY_ATTEMPTS');
         expect(r.body.retryAfter).toBeGreaterThan(0);
       });
+    // Depuis une autre adresse IP, le vrai titulaire se connecte encore : un tiers ne peut
+    // pas bloquer le compte de quelqu'un d'autre.
+    await new Api(app)
+      .post('/platform/auth/login', { email, password: 'Editeur2026!' })
+      .set('X-Forwarded-For', '203.0.113.9')
+      .expect(200);
     // Les autres comptes ne sont pas bloqués.
     await new Api(app).get('/platform/auth/me').expect(401);
     expect((await sa.get('/platform/auth/me').expect(200)).body.id).toBe(saId);
@@ -8684,6 +8722,15 @@ describe('Espace éditeur (super administrateur)', () => {
     await nadia2
       .patch(`/platform/admins/${saId}`, { isActive: false })
       .expect(403);
+    await nadia2
+      .post('/platform/admins', {
+        email: saEmail(),
+        firstName: 'X',
+        lastName: 'Y',
+        password: 'Editeur2026!',
+      })
+      .expect(403);
+    await nadia2.post(`/platform/admins/${saId}/mfa-reset`).expect(403);
     await nadia2.delete(`/platform/admins/${saId}`).expect(403);
     await sa
       .patch(`/platform/admins/${saId}`, { isActive: false })
@@ -9352,11 +9399,19 @@ describe('Sorties de zone', () => {
     );
     expect(await exits()).toEqual([]);
 
-    // Sortie franche, encore courte : enregistrée, chef pas encore prévenu.
+    // Sortie franche, encore courte : enregistrée, chef pas encore prévenu, mais la carte en
+    // direct affiche « Hors zone » tout de suite.
+    const emitted = jest.spyOn(app.get(RealtimeService), 'emit');
     await send(point(ago(30), east(500)), point(ago(28), east(600)));
     let list = await exits();
     expect(list).toHaveLength(1);
     expect(list[0]).toMatchObject({ endedAt: null, alertedAt: null });
+    expect(emitted).toHaveBeenCalledWith(
+      expect.any(Array),
+      'agent:zone-exit',
+      expect.objectContaining({ id: list[0].id, endedAt: null }),
+    );
+    emitted.mockRestore();
     expect(list[0].maxDistanceM).toBeGreaterThanOrEqual(590);
     expect(await alerts()).toEqual([]);
 

@@ -88,6 +88,22 @@ describe('FirebaseTransport', () => {
     ]);
   });
 
+  it('version web : notification du navigateur avec l’icône et le lien de l’app', async () => {
+    const { sent, transport } = fakeMessaging();
+    await transport.send([{ token: 'web-1', platform: 'web' }], {
+      type: 'zone_request.created',
+      title: 'Demande de zone',
+    });
+    // Pas de boutons sur le web : notification affichée par le navigateur.
+    expect(sent).toHaveLength(1);
+    expect(sent[0].tokens).toEqual(['web-1']);
+    expect(sent[0].notification).toEqual({ title: 'Demande de zone' });
+    expect(sent[0].webpush).toEqual({
+      notification: { icon: 'https://app.performx.online/icons/Icon-192.png' },
+      fcmOptions: { link: 'https://app.performx.online' },
+    });
+  });
+
   it('demande de zone : boutons via la catégorie iOS, message en données sur Android', async () => {
     const { sent, transport } = fakeMessaging();
     const result = await transport.send(

@@ -6,7 +6,7 @@ import {
   notFound,
 } from '../common/business.exception';
 import { DbService } from '../common/db.service';
-import { imageMime } from '../common/image';
+import { cleanImage, imageMime } from '../common/image';
 import { normalizePhone } from '../common/phone';
 import { RedisService } from '../common/redis.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
@@ -234,9 +234,10 @@ export class LandingService {
     const mime = imageMime(file.buffer);
     if (!mime)
       throw badRequest('IMAGE_FORMAT', 'Formats acceptés : PNG, JPEG ou WebP');
+    const data = await cleanImage(file.buffer, mime);
     const [row] = await this.db.manager.query<{ id: string }[]>(
       `INSERT INTO landing_assets (mime, data, size, created_by) VALUES ($1, $2, $3, $4) RETURNING id`,
-      [mime, file.buffer, file.size, admin.email],
+      [mime, data, data.length, admin.email],
     );
     return { id: row.id, url: `/api/public/landing/assets/${row.id}` };
   }

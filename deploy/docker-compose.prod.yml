@@ -81,6 +81,9 @@ services:
       # 127.0.0.1 : joignable seulement par Apache sur ce serveur (accès public par le domaine
       # en HTTPS). PUBLIC_BIND=0.0.0.0 rouvre http://IP:PUBLIC_PORT (anciens téléphones).
       - "${PUBLIC_BIND:-127.0.0.1}:${PUBLIC_PORT:-8090}:80"
+    # Fichiers à télécharger (APK Android) : /opt/suivi-agent/downloads → /downloads/.
+    volumes:
+      - ${DOWNLOADS_DIR:-../../downloads}:/usr/share/nginx/html/downloads:ro
     depends_on:
       - api
 

@@ -52,6 +52,11 @@ export class UpdateSettingsDto {
   @IsBoolean()
   zoneRequired?: boolean;
 
+  /** Journée démarrée seulement depuis l'app mobile (pas la version web) */
+  @IsOptional()
+  @IsBoolean()
+  requireMobileTracking?: boolean;
+
   @IsOptional()
   @IsIn(Object.values(ApprovalMode))
   approvalMode?: ApprovalMode;

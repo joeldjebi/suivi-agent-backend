@@ -30,6 +30,15 @@ async function bootstrap() {
   );
   app.enableShutdownHooks();
 
+  // Documentation de l'API : pas en production (elle décrirait toutes les routes à
+  // n'importe qui), sauf API_DOCS=on.
+  if (process.env.NODE_ENV !== 'production' || process.env.API_DOCS === 'on')
+    setupDocs(app);
+
+  await app.listen(process.env.PORT ?? 3000);
+}
+
+function setupDocs(app: NestExpressApplication) {
   const swaggerConfig = new DocumentBuilder()
     .setTitle('PerformX API')
     .setDescription(
@@ -50,7 +59,6 @@ async function bootstrap() {
       },
     },
   );
-
-  await app.listen(process.env.PORT ?? 3000);
 }
+
 void bootstrap();

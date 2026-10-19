@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { imageMime } from '../common/image';
+import { cleanImage, imageMime } from '../common/image';
 import { badRequest, notFound } from '../common/business.exception';
 import { DbService } from '../common/db.service';
 import { Feature } from '@suivi/shared';
@@ -126,7 +126,7 @@ export class BrandingService {
     await this.get();
     await this.db.manager.query(
       `UPDATE tenant_branding SET logo = $2, logo_mime = $3, version = version + 1, updated_at = now() WHERE tenant_id = $1`,
-      [this.db.tenantId, file.buffer, mime],
+      [this.db.tenantId, await cleanImage(file.buffer, mime), mime],
     );
     return this.get();
   }

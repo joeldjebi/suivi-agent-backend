@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable } from '@nestjs/common';
 import {
   AlertType,
   DayEndReason,
@@ -11,7 +11,11 @@ import {
 import { In, IsNull } from 'typeorm';
 import { AccessService } from '../common/access.service';
 import type { AuthUser } from '../common/auth-user';
-import { conflict, notFound } from '../common/business.exception';
+import {
+  BusinessException,
+  conflict,
+  notFound,
+} from '../common/business.exception';
 import { DbService } from '../common/db.service';
 import { RealtimeService } from '../common/realtime.service';
 import { AlertsService } from '../common/alerts.service';
@@ -80,6 +84,13 @@ export class DaysService {
     const { day, approved, pending } = await this.current(agent.id);
     if (day)
       throw conflict('DAY_ALREADY_STARTED', 'Votre journée est déjà démarrée');
+    // Suivi continu obligatoire : le navigateur coupe le GPS écran éteint.
+    if (settings.requireMobileTracking && client === 'web')
+      throw new BusinessException(
+        HttpStatus.FORBIDDEN,
+        'MOBILE_APP_REQUIRED',
+        'Démarrez votre journée depuis l’app mobile PerformX : votre structure demande un suivi continu, même écran éteint.',
+      );
 
     let zoneId: string | null = null;
     if (approved) {

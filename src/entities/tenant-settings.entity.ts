@@ -30,6 +30,10 @@ export class TenantSettings {
   @Column({ name: 'zone_required' })
   zoneRequired: boolean;
 
+  /** Suivi continu obligatoire : journée démarrée seulement depuis l'app mobile */
+  @Column({ name: 'require_mobile_tracking', default: false })
+  requireMobileTracking: boolean;
+
   @Column({ name: 'approval_mode', type: 'text' })
   approvalMode: ApprovalMode;
 

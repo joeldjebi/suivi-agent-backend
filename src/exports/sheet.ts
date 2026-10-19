@@ -86,6 +86,16 @@ export async function toXlsx(sheet: Sheet, author: string): Promise<Buffer> {
 }
 
 /** CSV pour Excel en français : « ; », virgule décimale, BOM UTF-8, dates JJ/MM/AAAA. */
+/**
+ * Texte saisi qui commence par = + - @ (ou une tabulation) : Excel l'exécuterait comme une
+ * formule à l'ouverture du CSV. Il est préfixé d'une apostrophe ; les nombres restent tels quels.
+ */
+export function csvSafe(value: string): string {
+  return /^[=+\-@\t\r]/.test(value) && !/^-?\d+([.,]\d+)?$/.test(value)
+    ? `'${value}`
+    : value;
+}
+
 export function toCsv(sheet: Sheet): Buffer {
   const escape = (v: string) =>
     /[";\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
@@ -98,10 +108,10 @@ export function toCsv(sheet: Sheet): Buffer {
       const [y, m, day] = d.split('-');
       return `${day}/${m}/${y}${t ? ` ${t}` : ''}`;
     }
-    return v;
+    return csvSafe(v);
   };
   const lines = [
-    sheet.columns.map((c) => escape(c.header)).join(';'),
+    sheet.columns.map((c) => escape(csvSafe(c.header))).join(';'),
     ...sheet.rows.map((r) =>
       r.map((v, i) => escape(format(v, sheet.columns[i].kind))).join(';'),
     ),

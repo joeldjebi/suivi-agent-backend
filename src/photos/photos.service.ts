@@ -4,7 +4,7 @@ import { AccessService } from '../common/access.service';
 import type { AuthUser } from '../common/auth-user';
 import { badRequest, notFound } from '../common/business.exception';
 import { DbService } from '../common/db.service';
-import { imageMime } from '../common/image';
+import { cleanImage, imageMime } from '../common/image';
 import type { UploadPhotoDto } from './photos.dto';
 
 /** Taille maximale d'une photo (le téléphone la réduit avant l'envoi). */
@@ -47,6 +47,7 @@ export class PhotosService {
         'PHOTO_FORMAT',
         'Format non reconnu : JPEG, PNG ou WebP attendu',
       );
+    const data = await cleanImage(file.buffer, mime);
     const [saved] = await m.query<{ id: string }[]>(
       `INSERT INTO submission_photos
          (tenant_id, agent_id, client_id, data, mime, size, lat, lng, accuracy, taken_at)
@@ -57,9 +58,9 @@ export class PhotosService {
         this.db.tenantId,
         user.id,
         dto.clientId,
-        file.buffer,
+        data,
         mime,
-        file.size,
+        data.length,
         dto.lat ?? null,
         dto.lng ?? null,
         dto.accuracy ?? null,

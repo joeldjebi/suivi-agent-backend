@@ -24,6 +24,7 @@ import {
   TokensDto,
 } from './auth.dto';
 import { AuthService, MAX_AVATAR_BYTES } from './auth.service';
+import { RateLimit } from '../common/rate-limit';
 
 @ApiTags('Authentification')
 @AllowWhenSuspended()
@@ -33,6 +34,8 @@ export class AuthController {
 
   /** Inscription d'une structure et de son premier administrateur. */
   @Public()
+  // Création de structures en série (essais gratuits) : 5 par heure et par adresse IP.
+  @RateLimit(5, 3600)
   @Post('register')
   register(@Body() dto: RegisterDto): Promise<TokensDto> {
     return this.auth.register(dto);
@@ -46,6 +49,7 @@ export class AuthController {
   }
 
   @Public()
+  @RateLimit(60, 60)
   @Post('refresh')
   @HttpCode(200)
   refresh(@Body() dto: RefreshDto): Promise<TokensDto> {

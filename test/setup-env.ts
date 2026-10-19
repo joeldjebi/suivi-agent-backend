@@ -4,3 +4,5 @@ process.env.DATABASE_NAME =
 process.env.JWT_SECRET ??= 'test-secret';
 // Pas d'appel à OpenStreetMap pendant les tests : seules les communes du catalogue répondent.
 process.env.GEOCODER = 'off';
+// Plafond de requêtes par IP désactivé : les tests enchaînent des centaines d'appels.
+process.env.RATE_LIMIT ??= 'off';

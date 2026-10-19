@@ -82,6 +82,7 @@ export class ZoneExitsService {
     }
     const wasAlerted = new Set(open?.alertedAt ? [open.id] : ([] as string[]));
     const touched: ZoneExit[] = [];
+    const opened = new Set<ZoneExit>();
     const tolerance = settings.zoneExitToleranceMeters;
 
     for (const [i, point] of sorted.entries()) {
@@ -102,6 +103,7 @@ export class ZoneExitsService {
           alertedAt: null,
         });
         touched.push(open);
+        opened.add(open);
         continue;
       }
       if (point.recordedAt <= open.exitedAt) continue;
@@ -125,6 +127,8 @@ export class ZoneExitsService {
       if (!exit.alertedAt && long) await this.alert(exit);
       else if (wasAlerted.has(exit.id) && exit.endedAt)
         await this.announceReturn(exit);
+      // Carte en direct : « Hors zone » dès la sortie, et retiré au retour (avant toute alerte).
+      else if (opened.has(exit) || exit.endedAt) await this.emit(exit);
       if (exit.endedAt)
         await this.alerts.resolve(
           exit.agentId,

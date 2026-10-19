@@ -28,6 +28,11 @@ export class RealtimeService {
     this.server.to(roomNames).emit(event, payload);
   }
 
+  /** Session coupée (désactivation, mot de passe changé…) : connexions en direct fermées. */
+  disconnectUser(userId: string) {
+    this.server?.in(rooms.user(userId)).disconnectSockets(true);
+  }
+
   /** Tous les appareils connectés, toutes structures confondues (version de l'app). */
   broadcast(event: string, payload: unknown) {
     this.server?.emit(event, payload);

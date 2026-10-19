@@ -10,6 +10,7 @@ import type { Server, Socket } from 'socket.io';
 import { AccessService } from '../common/access.service';
 import { DbService } from '../common/db.service';
 import { RealtimeService, rooms } from '../common/realtime.service';
+import { SessionRevocationService } from '../common/session-revocation.service';
 import type { JwtPayload } from '../auth/jwt.strategy';
 
 /**
@@ -26,6 +27,7 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
     private readonly db: DbService,
     private readonly access: AccessService,
     private readonly realtime: RealtimeService,
+    private readonly revocation: SessionRevocationService,
   ) {}
 
   afterInit(server: Server) {
@@ -37,6 +39,9 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
       const token = (client.handshake.auth as { token?: string }).token;
       if (!token) throw new Error('Jeton manquant');
       const payload = await this.jwt.verifyAsync<JwtPayload>(token);
+      // Jeton révoqué (compte désactivé, mot de passe changé) : connexion refusée.
+      if (await this.revocation.isRevoked(payload.sub, payload))
+        throw new Error('Session révoquée');
       const joined = [rooms.user(payload.sub), rooms.tenant(payload.tenantId)];
       if (payload.role === Role.Admin)
         joined.push(rooms.admins(payload.tenantId));

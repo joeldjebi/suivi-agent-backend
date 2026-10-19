@@ -29,19 +29,27 @@ export const APP_LOGIN: LoginLimits = {
   perIp: 50,
 };
 
+/** Échecs tolérés pour un compte toutes adresses IP confondues (attaque répartie). */
+const ACCOUNT_FACTOR = 10;
+
 /**
- * Protection contre les essais de mots de passe : au-delà du seuil d'échecs pour un compte
- * (ou pour une adresse IP) en 15 minutes, la connexion est refusée, même avec le bon mot de
- * passe, jusqu'à la fin de la fenêtre.
+ * Protection contre les essais de mots de passe, en 15 minutes :
+ * - un compte depuis une même adresse IP : au-delà du seuil, cette adresse ne peut plus s'y
+ *   connecter (un tiers ne peut donc pas bloquer le compte de quelqu'un d'autre) ;
+ * - un compte toutes adresses confondues : seuil 10 fois plus haut (attaque répartie) ;
+ * - une adresse IP, tous comptes confondus.
+ * Au-delà, la connexion est refusée, même avec le bon mot de passe, jusqu'à la fin de la fenêtre.
  */
 @Injectable()
 export class LoginThrottle {
   constructor(private readonly redis: RedisService) {}
 
   private keys(limits: LoginLimits, ip: string, account: string) {
+    const name = account.toLowerCase();
     return {
       ip: `${limits.prefix}:fail:ip:${ip}`,
-      account: `${limits.prefix}:fail:account:${account.toLowerCase()}`,
+      accountIp: `${limits.prefix}:fail:account-ip:${name}:${ip}`,
+      account: `${limits.prefix}:fail:account:${name}`,
     };
   }
 
@@ -51,16 +59,19 @@ export class LoginThrottle {
     account: string,
   ): Promise<void> {
     const keys = this.keys(limits, ip, account);
-    const [byAccount, byIp] = await this.redis.client.mget(
+    const [byAccountIp, byAccount, byIp] = await this.redis.client.mget(
+      keys.accountIp,
       keys.account,
       keys.ip,
     );
     const blocked =
-      Number(byAccount ?? 0) >= limits.perAccount
-        ? keys.account
-        : Number(byIp ?? 0) >= limits.perIp
-          ? keys.ip
-          : null;
+      Number(byAccountIp ?? 0) >= limits.perAccount
+        ? keys.accountIp
+        : Number(byAccount ?? 0) >= limits.perAccount * ACCOUNT_FACTOR
+          ? keys.account
+          : Number(byIp ?? 0) >= limits.perIp
+            ? keys.ip
+            : null;
     if (!blocked) return;
     const ttl = await this.redis.client.ttl(blocked);
     const minutes = Math.max(1, Math.ceil(ttl / 60));
@@ -76,6 +87,8 @@ export class LoginThrottle {
     const keys = this.keys(limits, ip, account);
     await this.redis.client
       .multi()
+      .incr(keys.accountIp)
+      .expire(keys.accountIp, WINDOW_SECONDS, 'NX')
       .incr(keys.account)
       .expire(keys.account, WINDOW_SECONDS, 'NX')
       .incr(keys.ip)
@@ -83,8 +96,9 @@ export class LoginThrottle {
       .exec();
   }
 
-  /** Connexion réussie : le compteur du compte repart à zéro. */
-  async reset(limits: LoginLimits, account: string): Promise<void> {
-    await this.redis.client.del(this.keys(limits, '', account).account);
+  /** Connexion réussie : les compteurs du compte (et de cette adresse) repartent à zéro. */
+  async reset(limits: LoginLimits, account: string, ip = ''): Promise<void> {
+    const keys = this.keys(limits, ip, account);
+    await this.redis.client.del(keys.accountIp, keys.account);
   }
 }

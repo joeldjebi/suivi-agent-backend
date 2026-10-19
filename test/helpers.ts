@@ -14,6 +14,12 @@ export async function createApp(): Promise<INestApplication<App>> {
     imports: [AppModule],
   }).compile();
   const app = moduleRef.createNestApplication<INestApplication<App>>();
+  // Comme en production derrière le proxy : X-Forwarded-For simule d'autres adresses IP.
+  (
+    app.getHttpAdapter().getInstance() as {
+      set: (k: string, v: unknown) => void;
+    }
+  ).set('trust proxy', true);
   app.setGlobalPrefix('api');
   app.useGlobalPipes(
     new ValidationPipe({

@@ -13,6 +13,7 @@ import type { AuthUser } from '../common/auth-user';
 import { CurrentUser, RequiresFeature, Roles } from '../common/decorators';
 import { DaysExportQuery, SubmissionsExportQuery } from './exports.dto';
 import { type ExportFile, ExportsService } from './exports.service';
+import { RateLimit } from '../common/rate-limit';
 
 const send = (res: Response, file: ExportFile) => {
   res.set({
@@ -28,6 +29,8 @@ const send = (res: Response, file: ExportFile) => {
 @ApiBearerAuth()
 @RequiresFeature(Feature.Exports)
 @Roles(Role.Admin, Role.TeamLead)
+// Fichiers lourds à produire : 30 exports par 10 minutes et par adresse IP.
+@RateLimit(30, 600)
 @Controller('exports')
 export class ExportsController {
   constructor(private readonly exports: ExportsService) {}

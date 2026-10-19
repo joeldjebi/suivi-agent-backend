@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { RealtimeService } from './realtime.service';
 import { RedisService } from './redis.service';
 
 /** Durée de conservation d'une révocation : au-delà, tout jeton d'accès émis avant a expiré. */
@@ -10,7 +11,10 @@ const REVOCATION_TTL_SECONDS = 24 * 3600;
  */
 @Injectable()
 export class SessionRevocationService {
-  constructor(private readonly redis: RedisService) {}
+  constructor(
+    private readonly redis: RedisService,
+    private readonly realtime: RealtimeService,
+  ) {}
 
   private key(userId: string) {
     return `revoked:${userId}`;
@@ -25,6 +29,9 @@ export class SessionRevocationService {
       'EX',
       REVOCATION_TTL_SECONDS,
     );
+    // Les connexions en direct ouvertes avec l'ancien jeton sont fermées tout de suite ;
+    // l'app se reconnecte avec un jeton valable, s'il en a un.
+    this.realtime.disconnectUser(userId);
   }
 
   /**
