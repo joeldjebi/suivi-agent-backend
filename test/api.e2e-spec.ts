@@ -78,6 +78,24 @@ describe('Santé', () => {
       redis: 'up',
     });
   });
+
+  it('GET /health répond 503 quand Redis est en panne (vu par la surveillance)', async () => {
+    const redis = app.get(RedisService).client;
+    const ping = jest
+      .spyOn(redis, 'ping')
+      .mockRejectedValueOnce(new Error('Redis injoignable'));
+    try {
+      const res = await new Api(app).get('/health').expect(503);
+      expect(res.body).toMatchObject({
+        status: 'down',
+        database: 'up',
+        redis: 'down',
+      });
+    } finally {
+      ping.mockRestore();
+    }
+    await new Api(app).get('/health').expect(200);
+  });
 });
 
 describe('Authentification', () => {
