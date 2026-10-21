@@ -36,6 +36,12 @@ async function bootstrap() {
     setupDocs(app);
 
   await app.listen(process.env.PORT ?? 3000);
+  // Connexions inactives gardées 65 s (5 s par défaut avec Node) : plus longtemps que le
+  // serveur placé devant (Apache, nginx) et que les clients qui les réutilisent. Sinon une
+  // connexion fermée au moment où elle est réutilisée fait échouer la requête (502, reset).
+  const server = app.getHttpServer();
+  server.keepAliveTimeout = 65_000;
+  server.headersTimeout = 66_000;
 }
 
 function setupDocs(app: NestExpressApplication) {

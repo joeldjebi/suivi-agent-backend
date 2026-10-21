@@ -52,6 +52,11 @@ export class PositionsService {
     const m = this.db.manager;
     const day = await m.findOneBy(WorkDay, { id: dto.dayId, agentId: user.id });
     if (!day) throw notFound('Journée');
+    // Deux lots simultanés du même agent (renvoi sur un réseau lent) : traités l'un après
+    // l'autre. Le verrou est pris avant l'insertion : sinon chaque lot garde le verrou léger
+    // posé par l'insertion (clé étrangère) et attend l'autre pour le suivi des sorties de
+    // zone, ce qui bloque les deux (deadlock, erreur 500).
+    await m.query(`SELECT 1 FROM work_days WHERE id = $1 FOR UPDATE`, [day.id]);
     const settings = await this.access.settings();
     const pauses = settings.trackDuringPause
       ? []

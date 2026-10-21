@@ -10440,3 +10440,34 @@ describe('Plafond de requêtes', () => {
     }
   });
 });
+
+describe('Positions envoyées en même temps', () => {
+  it('plusieurs lots simultanés du même agent : tous acceptés, sans blocage', async () => {
+    const t = await newTenant(app);
+    const zone = await t.createZone('Plateau', PLATEAU);
+    const agent = await t.createUser('agent');
+    await agent.api.post('/zone-requests', { zoneId: zone.id }).expect(201);
+    const day = (await agent.api.post('/days/start').expect(200)).body as {
+      id: string;
+    };
+    const base = Date.now() - 60_000;
+    for (let round = 0; round < 3; round++) {
+      const lots = Array.from({ length: 10 }, (_, i) =>
+        agent.api.post('/positions/batch', {
+          dayId: day.id,
+          points: [
+            point(new Date(base + round * 1000 + i * 50)),
+            point(new Date(base + round * 1000 + i * 50 + 10)),
+          ],
+        }),
+      );
+      const res = await Promise.all(lots);
+      expect(res.map((r) => r.status)).toEqual(Array(10).fill(200));
+    }
+    const [{ n }] = await owner.query<{ n: number }[]>(
+      `SELECT count(*)::int AS n FROM positions WHERE day_id = $1`,
+      [day.id],
+    );
+    expect(n).toBe(60);
+  });
+});
