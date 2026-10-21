@@ -53,6 +53,8 @@ export interface Serveur {
   disk: { usedPct: number; totalGb: number; availGb: number } | null;
   load: { one: number; five: number; fifteen: number } | null;
   uptimeS: number | null;
+  /** Nombre de cœurs : la charge se lit par rapport à lui. */
+  cores: number | null;
 }
 
 export interface Interne {
@@ -229,6 +231,9 @@ export class SupervisionService {
         api_key: cle,
         format: 'json',
         custom_uptime_ratios: '1-7-30',
+        // Temps de réponse moyen (average_response_time) : demandé avec response_times.
+        response_times: '1',
+        response_times_limit: '1',
         response_times_average: '30',
         logs: '1',
         logs_limit: '10',
@@ -370,11 +375,14 @@ export class SupervisionService {
 
     // Le processeur sert de test de connexion : s'il échoue, le bloc est en erreur.
     const cpu = await graphique('system.cpu');
-    const [ram, disque, charge, uptime] = await Promise.all([
+    const [ram, disque, charge, uptime, info] = await Promise.all([
       tolerant(graphique('system.ram')),
       tolerant(graphique('disk_space./')),
       tolerant(graphique('system.load')),
       tolerant(graphique('system.uptime')),
+      tolerant(
+        this.appel<{ cores_total?: string | number }>(`${base}/api/v1/info`),
+      ),
     ]);
     const ramTotal = ram ? somme(ram) : 0;
     const disqueTotal = disque ? somme(disque) : 0;
@@ -408,6 +416,7 @@ export class SupervisionService {
           }
         : null,
       uptimeS: uptime ? Math.round(uptime.uptime ?? 0) || null : null,
+      cores: nombre(info?.body.cores_total),
     };
   }
 }

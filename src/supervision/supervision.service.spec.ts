@@ -132,6 +132,7 @@ describe('SupervisionService', () => {
     const corps = (fetchMock.mock.calls[0][1] as { body: URLSearchParams })
       .body;
     expect(corps.get('api_key')).toBe('ur-lecture');
+    expect(corps.get('response_times')).toBe('1');
 
     // Deuxième lecture : servie par le cache ; refresh relit l'outil.
     await service().overview();
@@ -243,6 +244,8 @@ describe('SupervisionService', () => {
       'system.uptime': { labels: ['time', 'uptime'], data: [[1, 864000]] },
     };
     fetchMock.mockImplementation((url: string) => {
+      if (url.endsWith('/api/v1/info'))
+        return Promise.resolve(json({ cores_total: '24' }));
       const chart = decodeURIComponent(/chart=([^&]+)/.exec(url)![1]);
       expect(
         url.startsWith('http://host.docker.internal:19999/api/v1/data'),
@@ -257,6 +260,7 @@ describe('SupervisionService', () => {
       disk: { usedPct: 40, totalGb: 100, availGb: 60 },
       load: { one: 0.5, five: 0.4, fifteen: 0.3 },
       uptimeS: 864000,
+      cores: 24,
     });
   });
 
