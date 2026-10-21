@@ -48,6 +48,7 @@ import { PayrollModule } from './payroll/payroll.module';
 import { PlatformModule } from './platform/platform.module';
 import { LandingModule } from './landing/landing.module';
 import { PresentationsModule } from './presentations/presentations.module';
+import { SupervisionModule } from './supervision/supervision.module';
 import { SettingsModule } from './settings/settings.module';
 import { StatsModule } from './stats/stats.module';
 import { SubscriptionGuard } from './subscriptions/subscription.guard';
@@ -116,6 +117,7 @@ import { RateLimitGuard } from './common/rate-limit';
     PlatformModule,
     LandingModule,
     PresentationsModule,
+    SupervisionModule,
     BrandingModule,
     RealtimeModule,
     JobsModule,

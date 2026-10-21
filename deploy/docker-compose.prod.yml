@@ -59,6 +59,9 @@ services:
       # Relais internes (Nginx du site, Apache ou autre proxy du serveur) : l'adresse du
       # client reste la vraie, même derrière plusieurs relais.
       TRUST_PROXY: ${TRUST_PROXY:-loopback, linklocal, uniquelocal}
+    # Agent Netdata du serveur (page Supervision), joint sans l'ouvrir à Internet.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # Clés hors dépôt (compte de service Firebase pour les notifications push).
     volumes:
       - ./secrets:/app/secrets:ro

@@ -10541,3 +10541,38 @@ describe('Structure de démo supprimée ou mot de passe renouvelé', () => {
     await apres.api.get('/missions').expect(401);
   });
 });
+
+describe('Supervision (console éditeur)', () => {
+  it('synthèse réservée à l’éditeur : état interne, outils externes non configurés', async () => {
+    const t = await newTenant(app);
+    await new Api(app).get('/platform/supervision').expect(401);
+    await t.admin.api.get('/platform/supervision').expect(401);
+
+    const email = uniqueEmail('sa-supervision');
+    await owner.query(
+      `INSERT INTO platform_admins (email, password_hash, first_name, last_name)
+       VALUES ($1, $2, 'Awa', 'Supervision')`,
+      [email, await hashPassword('Editeur2026!')],
+    );
+    const login = await new Api(app)
+      .post('/platform/auth/login', { email, password: 'Editeur2026!' })
+      .expect(200);
+    const sa = new Api(app, login.body.accessToken as string);
+
+    const s = (await sa.get('/platform/supervision?refresh=1').expect(200))
+      .body;
+    expect(s.performx).toMatchObject({
+      health: { status: 'ok', database: 'up', redis: 'up' },
+      errorLog: { open: expect.any(Number), lastDay: expect.any(Number) },
+    });
+    expect(s.performx.databaseMb).toBeGreaterThan(0);
+    expect(s.performx.databaseConnections).toBeGreaterThan(0);
+    expect(s.performx.activeDays).toEqual(expect.any(Number));
+    expect(s.performx.positionsLastHour).toEqual(expect.any(Number));
+    expect(s.performx.apiUptimeS).toBeGreaterThanOrEqual(0);
+    // Sans clé dans l'environnement de test, aucun appel externe.
+    expect(s.availability).toEqual({ configured: false });
+    expect(s.errors).toEqual({ configured: false });
+    expect(s.server).toEqual({ configured: false });
+  });
+});
