@@ -10569,6 +10569,7 @@ describe('Supervision (console éditeur)', () => {
     expect(s.performx.databaseConnections).toBeGreaterThan(0);
     expect(s.performx.activeDays).toEqual(expect.any(Number));
     expect(s.performx.positionsLastHour).toEqual(expect.any(Number));
+    expect(s.performx.activity).toHaveLength(24);
     expect(s.performx.apiUptimeS).toBeGreaterThanOrEqual(0);
     // Sans clé dans l'environnement de test, aucun appel externe.
     expect(s.availability).toEqual({ configured: false });

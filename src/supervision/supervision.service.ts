@@ -24,6 +24,8 @@ export interface Sonde {
   responseMs: number | null;
   /** Dernières coupures (plus récente d'abord). */
   incidents: { at: string; durationS: number }[];
+  /** Temps de réponse moyen par heure, dernières 24 h (plus ancien d'abord). */
+  history: { at: string; ms: number }[];
 }
 
 export interface Disponibilite {
@@ -55,6 +57,8 @@ export interface Serveur {
   uptimeS: number | null;
   /** Nombre de cœurs : la charge se lit par rapport à lui. */
   cores: number | null;
+  /** Processeur et mémoire (%), par demi-heure sur 24 h (plus ancien d'abord). */
+  history: { at: string; cpu: number; ram: number | null }[];
 }
 
 export interface Interne {
@@ -67,6 +71,8 @@ export interface Interne {
   activeDays: number | null;
   positionsLastHour: number | null;
   errorLog: { open: number; lastDay: number };
+  /** Positions reçues et agents qui en ont envoyé, heure par heure sur 24 h. */
+  activity: { at: string; positions: number; agents: number }[] | null;
 }
 
 export interface Supervision {
@@ -123,31 +129,58 @@ export class SupervisionService {
   private async interne(): Promise<Interne> {
     const m = this.db.manager;
     const tolerant = <T>(p: Promise<T>) => p.catch(() => null);
-    const [health, base, redisInfo, activite, errorLog] = await Promise.all([
-      this.app.health(),
-      tolerant(
-        this.db.runAsSystem(() =>
-          m.query<{ size: string; connections: number }[]>(
-            `SELECT pg_database_size(current_database())::bigint AS size,
+    const [health, base, redisInfo, activite, errorLog, parHeure] =
+      await Promise.all([
+        this.app.health(),
+        tolerant(
+          this.db.runAsSystem(() =>
+            m.query<{ size: string; connections: number }[]>(
+              `SELECT pg_database_size(current_database())::bigint AS size,
                     (SELECT count(*)::int FROM pg_stat_activity WHERE datname = current_database()) AS connections`,
+            ),
           ),
         ),
-      ),
-      tolerant(this.redis.client.info('memory')),
-      tolerant(
-        this.db.runAsSystem(() =>
-          m.query<{ active: number; positions: number }[]>(
-            `SELECT
+        tolerant(this.redis.client.info('memory')),
+        tolerant(
+          this.db.runAsSystem(() =>
+            m.query<{ active: number; positions: number }[]>(
+              `SELECT
                (SELECT count(*)::int FROM work_days
                  WHERE status IN ('active', 'paused') AND work_date >= current_date - 1) AS active,
                (SELECT count(*)::int FROM positions p JOIN work_days d ON d.id = p.day_id
                  WHERE d.work_date >= current_date - 1
                    AND p.recorded_at > now() - interval '1 hour') AS positions`,
+            ),
           ),
         ),
-      ),
-      this.errorLog.summary(),
-    ]);
+        this.errorLog.summary(),
+        tolerant(
+          this.db.runAsSystem(() =>
+            m.query<{ h: string; positions: number; agents: number }[]>(
+              `SELECT extract(epoch FROM date_trunc('hour', p.recorded_at))::bigint AS h,
+                    count(*)::int AS positions,
+                    count(DISTINCT d.agent_id)::int AS agents
+             FROM positions p JOIN work_days d ON d.id = p.day_id
+             WHERE d.work_date >= current_date - 2
+               AND p.recorded_at > now() - interval '24 hours'
+             GROUP BY 1`,
+            ),
+          ),
+        ),
+      ]);
+    // Les 24 dernières heures, y compris celles sans position (à zéro).
+    const heureEnCours = Math.floor(Date.now() / 3_600_000) * 3_600_000;
+    const activity = parHeure
+      ? Array.from({ length: 24 }, (_, i) => {
+          const debut = heureEnCours - (23 - i) * 3_600_000;
+          const ligne = parHeure.find((r) => Number(r.h) * 1000 === debut);
+          return {
+            at: new Date(debut).toISOString(),
+            positions: ligne?.positions ?? 0,
+            agents: ligne?.agents ?? 0,
+          };
+        })
+      : null;
     const redisOctets = redisInfo
       ? nombre(/used_memory:(\d+)/.exec(redisInfo)?.[1])
       : null;
@@ -161,6 +194,7 @@ export class SupervisionService {
       activeDays: activite ? activite[0].active : null,
       positionsLastHour: activite ? activite[0].positions : null,
       errorLog,
+      activity,
     };
   }
 
@@ -223,6 +257,7 @@ export class SupervisionService {
         custom_uptime_ratio?: string;
         average_response_time?: string;
         logs?: { type: number; datetime: number; duration: number }[];
+        response_times?: { datetime: number; value: number }[];
       }[];
     }>('https://api.uptimerobot.com/v2/getMonitors', {
       method: 'POST',
@@ -231,10 +266,14 @@ export class SupervisionService {
         api_key: cle,
         format: 'json',
         custom_uptime_ratios: '1-7-30',
-        // Temps de réponse moyen (average_response_time) : demandé avec response_times.
+        // Temps de réponse : moyenne par heure sur 24 h (et average_response_time).
         response_times: '1',
-        response_times_limit: '1',
-        response_times_average: '30',
+        response_times_start_date: String(
+          Math.floor(Date.now() / 1000) - 86_400,
+        ),
+        response_times_end_date: String(Math.floor(Date.now() / 1000)),
+        response_times_average: '60',
+        response_times_limit: '100',
         logs: '1',
         logs_limit: '10',
       }),
@@ -268,6 +307,13 @@ export class SupervisionService {
             .map((l) => ({
               at: new Date(l.datetime * 1000).toISOString(),
               durationS: l.duration,
+            })),
+          history: (m.response_times ?? [])
+            .filter((t) => Number.isFinite(t.value))
+            .sort((a, b) => a.datetime - b.datetime)
+            .map((t) => ({
+              at: new Date(t.datetime * 1000).toISOString(),
+              ms: Math.round(t.value),
             })),
         };
       }),
@@ -369,21 +415,45 @@ export class SupervisionService {
       });
       return valeurs;
     };
+    /** Un graphique Netdata sur 24 h, par demi-heure : [horodatage, dimensions…]. */
+    const historique = async (chart: string) => {
+      const { body } = await this.appel<{
+        labels: string[];
+        data: number[][];
+      }>(
+        `${base}/api/v1/data?chart=${encodeURIComponent(chart)}&after=-86400&points=48&group=average&format=json&options=absolute`,
+      );
+      return body.data
+        .map((ligne) => ({
+          t: Number(ligne[0]),
+          valeurs: Object.fromEntries(
+            body.labels.slice(1).map((l, i) => [l, Number(ligne[i + 1]) || 0]),
+          ),
+        }))
+        .sort((a, b) => a.t - b.t);
+    };
     const tolerant = <T>(p: Promise<T>) => p.catch(() => null);
     const somme = (v: Record<string, number>) =>
       Object.values(v).reduce((a, b) => a + b, 0);
 
     // Le processeur sert de test de connexion : s'il échoue, le bloc est en erreur.
     const cpu = await graphique('system.cpu');
-    const [ram, disque, charge, uptime, info] = await Promise.all([
-      tolerant(graphique('system.ram')),
-      tolerant(graphique('disk_space./')),
-      tolerant(graphique('system.load')),
-      tolerant(graphique('system.uptime')),
-      tolerant(
-        this.appel<{ cores_total?: string | number }>(`${base}/api/v1/info`),
-      ),
-    ]);
+    const [ram, disque, charge, uptime, info, cpuJour, ramJour] =
+      await Promise.all([
+        tolerant(graphique('system.ram')),
+        tolerant(graphique('disk_space./')),
+        tolerant(graphique('system.load')),
+        tolerant(graphique('system.uptime')),
+        tolerant(
+          this.appel<{ cores_total?: string | number }>(`${base}/api/v1/info`),
+        ),
+        tolerant(historique('system.cpu')),
+        tolerant(historique('system.ram')),
+      ]);
+    const ramPct = (v: Record<string, number>) => {
+      const total = somme(v);
+      return total > 0 ? r1(((v.used ?? 0) / total) * 100) : null;
+    };
     const ramTotal = ram ? somme(ram) : 0;
     const disqueTotal = disque ? somme(disque) : 0;
     return {
@@ -417,6 +487,14 @@ export class SupervisionService {
         : null,
       uptimeS: uptime ? Math.round(uptime.uptime ?? 0) || null : null,
       cores: nombre(info?.body.cores_total),
+      history: (cpuJour ?? []).map((p) => {
+        const r = ramJour?.find((x) => x.t === p.t);
+        return {
+          at: new Date(p.t * 1000).toISOString(),
+          cpu: r1(somme(p.valeurs)),
+          ram: r ? ramPct(r.valeurs) : null,
+        };
+      }),
     };
   }
 }

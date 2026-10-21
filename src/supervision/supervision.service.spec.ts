@@ -26,7 +26,15 @@ describe('SupervisionService', () => {
       Promise.resolve(
         sql.includes('pg_database_size')
           ? [{ size: '52428800', connections: 7 }]
-          : [{ active: 3, positions: 360 }],
+          : sql.includes('date_trunc')
+            ? [
+                {
+                  h: String(Math.floor(Date.now() / 3_600_000) * 3600),
+                  positions: 120,
+                  agents: 2,
+                },
+              ]
+            : [{ active: 3, positions: 360 }],
       ),
     );
     return new SupervisionService(
@@ -82,6 +90,13 @@ describe('SupervisionService', () => {
       positionsLastHour: 360,
       errorLog: { open: 2, lastDay: 1 },
     });
+    // 24 heures, la dernière étant l'heure en cours ; les heures sans position à zéro.
+    expect(s.performx.activity).toHaveLength(24);
+    expect(s.performx.activity!.at(-1)).toMatchObject({
+      positions: 120,
+      agents: 2,
+    });
+    expect(s.performx.activity![0]).toMatchObject({ positions: 0, agents: 0 });
   });
 
   it('UptimeRobot : sondes, taux de disponibilité et coupures, puis cache', async () => {
@@ -99,6 +114,11 @@ describe('SupervisionService', () => {
             logs: [
               { type: 2, datetime: 1760000400, duration: 0 },
               { type: 1, datetime: 1760000000, duration: 300 },
+            ],
+            // Plus récent d'abord, comme UptimeRobot : remis dans l'ordre.
+            response_times: [
+              { datetime: 1760003600, value: 240.4 },
+              { datetime: 1760000000, value: 210 },
             ],
           },
           { friendly_name: 'Site', url: 'https://performx.online', status: 9 },
@@ -118,6 +138,10 @@ describe('SupervisionService', () => {
           incidents: [
             { at: new Date(1760000000000).toISOString(), durationS: 300 },
           ],
+          history: [
+            { at: new Date(1760000000000).toISOString(), ms: 210 },
+            { at: new Date(1760003600000).toISOString(), ms: 240 },
+          ],
         },
         {
           name: 'Site',
@@ -126,6 +150,7 @@ describe('SupervisionService', () => {
           uptime: { day: null, week: null, month: null },
           responseMs: null,
           incidents: [],
+          history: [],
         },
       ],
     });
@@ -261,6 +286,7 @@ describe('SupervisionService', () => {
       load: { one: 0.5, five: 0.4, fifteen: 0.3 },
       uptimeS: 864000,
       cores: 24,
+      history: [{ at: new Date(1000).toISOString(), cpu: 26, ram: 50 }],
     });
   });
 
