@@ -10392,3 +10392,51 @@ describe('Structure de démo d’une présentation', () => {
     await sa.delete(`/platform/presentations/${id}/demo`).expect(404);
   });
 });
+
+describe('Plafond de requêtes', () => {
+  const env = (vars: Record<string, string | undefined>) => {
+    for (const [k, v] of Object.entries(vars))
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+  };
+  const viderCompteurs = async () => {
+    const redis = app.get(RedisService).client;
+    const keys = await redis.keys('rl:*');
+    if (keys.length) await redis.del(...keys);
+  };
+
+  it('par utilisateur connecté : deux agents derrière la même adresse ne sont pas regroupés', async () => {
+    const t = await newTenant(app);
+    const a = await t.createUser('agent');
+    const b = await t.createUser('agent');
+    await viderCompteurs();
+    env({
+      RATE_LIMIT: 'on',
+      RATE_LIMIT_PER_USER_PER_MINUTE: '3',
+      RATE_LIMIT_PER_MINUTE: '2',
+    });
+    try {
+      // Agent A : 3 requêtes acceptées, la 4e refusée.
+      for (let i = 0; i < 3; i++) await a.api.get('/auth/me').expect(200);
+      await a.api
+        .get('/auth/me')
+        .expect(429)
+        .expect((r) => expect(r.body.code).toBe('TOO_MANY_REQUESTS'));
+      // Agent B, même adresse IP : son propre compteur.
+      for (let i = 0; i < 3; i++) await b.api.get('/auth/me').expect(200);
+      // Sans compte : plafond par adresse IP, inchangé.
+      await new Api(app).get('/public/landing').expect(200);
+      await new Api(app).get('/public/landing').expect(200);
+      await new Api(app).get('/public/landing').expect(429);
+      // Un jeton invalide compte comme une requête sans compte.
+      await new Api(app, 'jeton-invalide').get('/auth/me').expect(429);
+    } finally {
+      env({
+        RATE_LIMIT: 'off',
+        RATE_LIMIT_PER_USER_PER_MINUTE: undefined,
+        RATE_LIMIT_PER_MINUTE: undefined,
+      });
+      await viderCompteurs();
+    }
+  });
+});

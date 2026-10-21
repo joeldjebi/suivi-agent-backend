@@ -49,7 +49,9 @@ export class AuthController {
   }
 
   @Public()
-  @RateLimit(60, 60)
+  // Par adresse IP : les agents d'un même opérateur mobile partagent souvent la même
+  // (CGNAT). Le jeton de renouvellement (48 octets aléatoires) ne se devine pas.
+  @RateLimit(600, 60)
   @Post('refresh')
   @HttpCode(200)
   refresh(@Body() dto: RefreshDto): Promise<TokensDto> {
