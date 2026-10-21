@@ -5,6 +5,7 @@ import { hashPassword } from '../auth/auth.service';
 import { conflict, notFound } from '../common/business.exception';
 import { DbService } from '../common/db.service';
 import { RedisService } from '../common/redis.service';
+import { SessionRevocationService } from '../common/session-revocation.service';
 import { DEFAULT_LANDING } from '../landing/landing.defaults';
 import { normalizeFooter } from '../landing/landing.sanitize';
 import type { PlatformUser } from '../platform/platform-auth';
@@ -41,7 +42,27 @@ export class PresentationsService {
     private readonly db: DbService,
     private readonly subscriptions: SubscriptionsService,
     private readonly redis: RedisService,
+    private readonly revocation: SessionRevocationService,
   ) {}
+
+  /**
+   * Coupe toutes les sessions des comptes d'une structure de démo : jetons de
+   * renouvellement révoqués tout de suite, jetons d'accès refusés après validation (401,
+   * l'app revient à la connexion) et connexions en direct fermées.
+   */
+  private async couperSessions(tenantId: string) {
+    const users = await this.db.manager.query<{ id: string }[]>(
+      `SELECT id FROM users WHERE tenant_id = $1`,
+      [tenantId],
+    );
+    await this.db.manager.query(
+      `UPDATE refresh_tokens SET revoked_at = now() WHERE tenant_id = $1 AND revoked_at IS NULL`,
+      [tenantId],
+    );
+    this.db.afterCommit(() => {
+      for (const { id } of users) void this.revocation.revoke(id);
+    });
+  }
 
   private log(
     admin: PlatformUser,
@@ -330,6 +351,8 @@ export class PresentationsService {
       `UPDATE users SET password_hash = $2 WHERE tenant_id = $1`,
       [row.demoTenantId, await hashPassword(password)],
     );
+    // Comme pour un changement de mot de passe : les sessions ouvertes avant sont coupées.
+    await this.couperSessions(row.demoTenantId as string);
     await this.log(
       admin,
       'presentation.demo.password',
@@ -343,6 +366,7 @@ export class PresentationsService {
     const row = await this.get(id);
     const tenantId = row.demoTenantId as string | null;
     if (!tenantId) throw notFound('Structure de démo');
+    await this.couperSessions(tenantId);
     await this.db.manager.query(`DELETE FROM tenants WHERE id = $1`, [
       tenantId,
     ]);

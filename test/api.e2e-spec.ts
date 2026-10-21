@@ -10471,3 +10471,73 @@ describe('Positions envoyées en même temps', () => {
     expect(n).toBe(60);
   });
 });
+
+describe('Structure de démo supprimée ou mot de passe renouvelé', () => {
+  it('les sessions de ses comptes sont coupées proprement (401), sans erreur serveur', async () => {
+    const email = uniqueEmail('sa-sessions');
+    await owner.query(
+      `INSERT INTO platform_admins (email, password_hash, first_name, last_name) VALUES ($1, $2, 'Joël', 'Sessions')`,
+      [email, await hashPassword('Editeur2026!')],
+    );
+    const res = await new Api(app)
+      .post('/platform/auth/login', { email, password: 'Editeur2026!' })
+      .expect(200);
+    const sa = new Api(app, res.body.accessToken as string);
+    const defaults = (
+      await sa.get('/platform/presentations/defaults').expect(200)
+    ).body as Body;
+    const pres = (
+      await sa
+        .post('/platform/presentations', {
+          content: {
+            ...defaults,
+            clientName: 'Client Sessions',
+            agents: 4,
+            leads: 1,
+          },
+        })
+        .expect(201)
+    ).body as Body;
+    const connexion = async (password: string) => {
+      const demo = (
+        await sa.get(`/platform/presentations/${pres.id}/demo`).expect(200)
+      ).body as { accounts: Body[] };
+      const agent = demo.accounts.find((a) => a.role === 'agent')!;
+      const login = (
+        await new Api(app)
+          .post('/auth/login', { email: agent.email, password })
+          .expect(200)
+      ).body as Body;
+      return {
+        api: new Api(app, login.accessToken as string),
+        refresh: login.refreshToken as string,
+      };
+    };
+
+    // Nouveau mot de passe : les sessions ouvertes avant sont coupées.
+    const created = (
+      await sa.post(`/platform/presentations/${pres.id}/demo`).expect(201)
+    ).body as Body;
+    const avant = await connexion(created.password as string);
+    await avant.api.get('/auth/me').expect(200);
+    const reset = (
+      await sa
+        .post(`/platform/presentations/${pres.id}/demo/password`)
+        .expect(200)
+    ).body as Body;
+    await new Promise((r) => setTimeout(r, 50));
+    await avant.api.get('/auth/me').expect(401);
+    await new Api(app)
+      .post('/auth/refresh', { refreshToken: avant.refresh })
+      .expect(401);
+
+    // Suppression de la démo : jetons encore valides refusés (401), jamais une erreur 500.
+    const apres = await connexion(reset.password as string);
+    await apres.api.get('/auth/me').expect(200);
+    await sa.delete(`/platform/presentations/${pres.id}/demo`).expect(200);
+    await new Promise((r) => setTimeout(r, 50));
+    await apres.api.get('/auth/me').expect(401);
+    await apres.api.get('/days/current').expect(401);
+    await apres.api.get('/missions').expect(401);
+  });
+});
