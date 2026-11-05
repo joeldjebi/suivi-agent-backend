@@ -1,3 +1,5 @@
+import { FileStorage } from '../common/file-storage';
+import { RedisService } from '../common/redis.service';
 import {
   APP_VERSION_EVENT,
   APP_VERSION_SETTINGS,
@@ -57,6 +59,7 @@ import {
   UpdatePlanDto,
   UpdatePlatformProfileDto,
   UpdatePlatformSettingsDto,
+  DeleteTenantDto,
   UpdateTenantDto,
 } from './platform.dto';
 import * as QRCode from 'qrcode';
@@ -139,7 +142,89 @@ export class PlatformService {
     private readonly appVersions: AppVersionService,
     private readonly realtime: RealtimeService,
     private readonly photoAi: PhotoAiService,
+    private readonly redis: RedisService,
+    private readonly storage: FileStorage,
   ) {}
+
+  /**
+   * Suppression définitive d'une structure et de tout ce qui s'y rattache (comptes, journées,
+   * positions, missions, points de vente, commandes, stock, paie, factures, photos…), par le
+   * seul compte propriétaire, qui confirme avec le nom de la structure et son mot de passe.
+   * Les tables liées suivent par cascade ; le journal de la console garde la trace.
+   */
+  async deleteTenant(
+    admin: PlatformUser,
+    tenantId: string,
+    dto: DeleteTenantDto,
+  ) {
+    const m = this.db.manager;
+    const actor = await m
+      .createQueryBuilder(PlatformAdmin, 'a')
+      .addSelect('a.passwordHash')
+      .where('a.id = :id', { id: admin.id })
+      .getOne();
+    if (!actor?.isOwner)
+      throw forbidden(
+        'Seul le compte propriétaire peut supprimer définitivement une structure',
+      );
+    const [tenant] = await m.query<{ name: string }[]>(
+      `SELECT name FROM tenants WHERE id = $1`,
+      [tenantId],
+    );
+    if (!tenant) throw notFound('Structure');
+    if (dto.confirmName.trim() !== tenant.name.trim())
+      throw badRequest(
+        'CONFIRMATION_MISMATCH',
+        'Tapez exactement le nom de la structure pour confirmer la suppression',
+      );
+    if (!(await bcrypt.compare(dto.password, actor.passwordHash)))
+      throw badRequest('INVALID_PASSWORD', 'Mot de passe incorrect');
+
+    const [counts] = await m.query<
+      {
+        users: number;
+        outlets: number;
+        orders: number;
+        submissions: number;
+        photos: number;
+        invoices: number;
+      }[]
+    >(
+      `SELECT (SELECT count(*) FROM users WHERE tenant_id = $1)::int AS users,
+              (SELECT count(*) FROM outlets WHERE tenant_id = $1)::int AS outlets,
+              (SELECT count(*) FROM orders WHERE tenant_id = $1)::int AS orders,
+              (SELECT count(*) FROM mission_submissions WHERE tenant_id = $1)::int AS submissions,
+              (SELECT count(*) FROM submission_photos WHERE tenant_id = $1)::int AS photos,
+              (SELECT count(*) FROM invoices WHERE tenant_id = $1)::int AS invoices`,
+      [tenantId],
+    );
+    const users = await m.query<{ id: string }[]>(
+      `SELECT id FROM users WHERE tenant_id = $1`,
+      [tenantId],
+    );
+    await m.query(`DELETE FROM tenants WHERE id = $1`, [tenantId]);
+    // Journal technique des erreurs : la structure n'y est plus citée.
+    await m.query(
+      `UPDATE platform_errors
+       SET tenants = array_remove(tenants, $1::uuid),
+           last_tenant_id = CASE WHEN last_tenant_id = $1::uuid THEN NULL ELSE last_tenant_id END
+       WHERE $1::uuid = ANY(tenants) OR last_tenant_id = $1::uuid`,
+      [tenantId],
+    );
+    await this.log(admin, 'tenant.delete', null, {
+      tenantId,
+      name: tenant.name,
+      ...counts,
+    });
+    this.db.afterCommit(() => {
+      // Sessions ouvertes coupées, positions en direct et photos (fichiers) effacées.
+      for (const { id } of users) void this.revocation.revoke(id);
+      void this.redis.client.del(`live:${tenantId}`);
+      void this.storage.removeTree(`photos/${tenantId}`);
+      this.subscriptions.invalidate(tenantId);
+    });
+    return { deleted: true, name: tenant.name, ...counts };
+  }
 
   /** Supplément de photos analysées pour le mois en cours (remplace le précédent). */
   async setPhotoAiBonus(

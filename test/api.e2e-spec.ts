@@ -11721,3 +11721,136 @@ describe('IA photo', () => {
     }
   });
 });
+
+describe('Suppression définitive d’une structure', () => {
+  it('compte propriétaire seul, nom et mot de passe confirmés, tout part avec elle', async () => {
+    const t = await newTenant(app);
+    const other = await newTenant(app);
+    const agent = await t.createUser('agent');
+    const storage = app.get(FileStorage);
+    // Données liées : un point de vente, un produit, une photo (fichier hors de la base).
+    await t.admin.api
+      .post('/outlets', { name: 'Boutique à supprimer', lat: 5.32, lng: -4.02 })
+      .expect(201);
+    await t.admin.api
+      .post('/products', { name: 'Produit', own: true, unit: 'Bouteille' })
+      .expect(201);
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    await request(app.getHttpServer())
+      .post('/api/photos')
+      .set('Authorization', `Bearer ${agent.api.token}`)
+      .attach('file', png, 'p.png')
+      .field('clientId', randomUUID())
+      .field('takenAt', new Date().toISOString())
+      .expect(201);
+    expect(existsSync(`${storage.root}/photos/${t.tenantId}`)).toBe(true);
+    const [{ name }] = await owner.query<{ name: string }[]>(
+      `SELECT name FROM tenants WHERE id = $1`,
+      [t.tenantId],
+    );
+
+    const saLogin = async (isOwner: boolean) => {
+      const email = uniqueEmail(isOwner ? 'sa-proprio' : 'sa-simple');
+      await owner.query(
+        `INSERT INTO platform_admins (email, password_hash, first_name, last_name, is_owner)
+         VALUES ($1, $2, 'Awa', 'Test', $3)`,
+        [email, await hashPassword('Editeur2026!'), isOwner],
+      );
+      return new Api(
+        app,
+        (
+          await new Api(app)
+            .post('/platform/auth/login', { email, password: 'Editeur2026!' })
+            .expect(200)
+        ).body.accessToken as string,
+      );
+    };
+    const previousOwner = await owner.query<{ id: string }[]>(
+      `UPDATE platform_admins SET is_owner = false WHERE is_owner RETURNING id`,
+    );
+    try {
+      const simple = await saLogin(false);
+      const proprio = await saLogin(true);
+      const url = `/platform/tenants/${t.tenantId}/delete`;
+
+      // Un autre compte éditeur ne peut pas.
+      await simple
+        .post(url, { confirmName: name, password: 'Editeur2026!' })
+        .expect(403);
+      // Confirmation inexacte ou mauvais mot de passe : rien n'est supprimé.
+      expect(
+        (
+          await proprio
+            .post(url, { confirmName: 'autre nom', password: 'Editeur2026!' })
+            .expect(400)
+        ).body.code,
+      ).toBe('CONFIRMATION_MISMATCH');
+      expect(
+        (
+          await proprio
+            .post(url, { confirmName: name, password: 'mauvais-mdp' })
+            .expect(400)
+        ).body.code,
+      ).toBe('INVALID_PASSWORD');
+      await t.admin.api.get('/outlets').expect(200);
+
+      const done = (
+        await proprio
+          .post(url, { confirmName: ` ${name} `, password: 'Editeur2026!' })
+          .expect(200)
+      ).body as Body;
+      expect(done).toMatchObject({
+        deleted: true,
+        name,
+        users: 2,
+        outlets: 1,
+        photos: 1,
+      });
+
+      // Plus rien en base, les photos (fichiers) effacées, les comptes ne se connectent plus.
+      for (const table of [
+        'tenants',
+        'users',
+        'outlets',
+        'products',
+        'submission_photos',
+        'subscriptions',
+      ]) {
+        const column = table === 'tenants' ? 'id' : 'tenant_id';
+        expect(
+          await owner.query(`SELECT 1 FROM ${table} WHERE ${column} = $1`, [
+            t.tenantId,
+          ]),
+        ).toHaveLength(0);
+      }
+      await new Promise((r) => setTimeout(r, 100));
+      expect(existsSync(`${storage.root}/photos/${t.tenantId}`)).toBe(false);
+      await t.admin.api.get('/outlets').expect(401);
+      await proprio.get(`/platform/tenants/${t.tenantId}`).expect(404);
+      // Trace dans le journal de la console.
+      const [log] = await owner.query<{ details: Body }[]>(
+        `SELECT details FROM platform_audit WHERE action = 'tenant.delete'
+         AND details->>'tenantId' = $1`,
+        [t.tenantId],
+      );
+      expect(log.details).toMatchObject({ name, users: 2 });
+      // Les autres structures ne bougent pas.
+      await other.admin.api.get('/outlets').expect(200);
+      await proprio
+        .post(url, { confirmName: name, password: 'Editeur2026!' })
+        .expect(404);
+    } finally {
+      await owner.query(
+        `UPDATE platform_admins SET is_owner = false WHERE is_owner`,
+      );
+      if (previousOwner[0])
+        await owner.query(
+          `UPDATE platform_admins SET is_owner = true WHERE id = $1`,
+          [previousOwner[0].id],
+        );
+    }
+  });
+});

@@ -70,6 +70,19 @@ export class MfaDisableDto {
   code: string;
 }
 
+/** Suppression définitive d'une structure : son nom tapé en entier et le mot de passe. */
+export class DeleteTenantDto {
+  /** Nom exact de la structure, pour confirmer */
+  @IsString()
+  @IsNotEmpty()
+  confirmName: string;
+
+  /** Mot de passe du compte propriétaire */
+  @IsString()
+  @IsNotEmpty()
+  password: string;
+}
+
 export class PlatformPasswordDto {
   @IsString()
   @IsNotEmpty()

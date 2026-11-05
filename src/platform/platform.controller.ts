@@ -42,6 +42,7 @@ import {
   UpdatePlatformSettingsDto,
   UpdateTenantDto,
   VoidInvoiceDto,
+  DeleteTenantDto,
 } from './platform.dto';
 import {
   AllowWithoutMfa,
@@ -283,6 +284,17 @@ export class PlatformController {
     @Body() dto: SuspendDto,
   ) {
     return this.platform.suspend(admin, id, dto.reason);
+  }
+
+  /** Suppression définitive (compte propriétaire seulement) : la structure et toutes ses données. */
+  @Post('tenants/:id/delete')
+  @HttpCode(200)
+  deleteTenant(
+    @CurrentAdmin() admin: PlatformUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: DeleteTenantDto,
+  ) {
+    return this.platform.deleteTenant(admin, id, dto);
   }
 
   @Post('tenants/:id/reactivate')
