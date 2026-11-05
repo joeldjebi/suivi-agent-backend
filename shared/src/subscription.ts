@@ -60,8 +60,55 @@ export const Feature = {
   ProductAudits: 'product_audits',
   /** Prise de commande terrain : types de client, prix, commandes et leur suivi ; demande les points de vente */
   Orders: 'orders',
+  /** Vente en camionnette : stock des dépôts et camions, vente directe, reçus, caisse ; demande la prise de commande */
+  VanSales: 'van_sales',
+  /** Analyse des photos de rayon par IA (présence, faces, prix) ; quota mensuel par formule ; demande les relevés produits */
+  PhotoAi: 'photo_ai',
 } as const;
 export type Feature = (typeof Feature)[keyof typeof Feature];
+
+/**
+ * Fonctionnalités qui en demandent d'autres : une formule qui inclut la clé doit inclure ses
+ * prérequis (vérifié par l'API, appliqué automatiquement dans la console éditeur).
+ */
+export const FEATURE_REQUIRES: Partial<Record<Feature, Feature[]>> = {
+  [Feature.ProductAudits]: [Feature.PointsOfSale],
+  [Feature.Orders]: [Feature.PointsOfSale],
+  [Feature.VanSales]: [Feature.Orders],
+  [Feature.PhotoAi]: [Feature.ProductAudits],
+};
+
+/** Une fonctionnalité et tous ses prérequis, directs et indirects. */
+export function withRequirements(feature: Feature): Feature[] {
+  const all = new Set<Feature>([feature]);
+  const pending = [feature];
+  while (pending.length) {
+    for (const req of FEATURE_REQUIRES[pending.pop()!] ?? []) {
+      if (!all.has(req)) {
+        all.add(req);
+        pending.push(req);
+      }
+    }
+  }
+  return [...all];
+}
+
+/** Fonctionnalités qui dépendent (directement ou non) de celle-ci. */
+export function dependentsOf(feature: Feature): Feature[] {
+  return (Object.keys(FEATURE_REQUIRES) as Feature[]).filter(
+    (f) => f !== feature && withRequirements(f).includes(feature),
+  );
+}
+
+/** Premier prérequis manquant d'une liste de fonctionnalités, ou null si elle est complète. */
+export function missingRequirement(features: Feature[]): { feature: Feature; requires: Feature } | null {
+  for (const feature of features) {
+    for (const requires of FEATURE_REQUIRES[feature] ?? []) {
+      if (!features.includes(requires)) return { feature, requires };
+    }
+  }
+  return null;
+}
 
 /**
  * Fonctionnalités des formules installées par défaut (migration et démo). Le catalogue en

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { PassportModule } from '@nestjs/passport';
 import { AuthModule } from '../auth/auth.module';
+import { PhotosModule } from '../photos/photos.module';
 import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 import { PlatformJwtStrategy } from './platform-auth';
 import {
@@ -12,7 +13,7 @@ import { PlatformTenantService } from './platform-tenant.service';
 import { PlatformIpGuard } from './platform-security';
 
 @Module({
-  imports: [PassportModule, AuthModule, SubscriptionsModule],
+  imports: [PassportModule, AuthModule, SubscriptionsModule, PhotosModule],
   controllers: [PlatformAuthController, PlatformController],
   providers: [
     PlatformService,

@@ -15,6 +15,15 @@ import { RealtimeService } from '../src/common/realtime.service';
 import { RedisService } from '../src/common/redis.service';
 import { DEFAULT_LANDING } from '../src/landing/landing.defaults';
 import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { FileStorage } from '../src/common/file-storage';
+import { PhotosService } from '../src/photos/photos.service';
+import { PhotoAiService } from '../src/photo-ai/photo-ai.service';
+import {
+  PhotoAiProviders,
+  PermanentAnalysisError,
+  PHOTO_AI_PROVIDER,
+} from '../src/photo-ai/providers';
 import { hashPassword } from '../src/auth/auth.service';
 import { stepAt, totp } from '../src/platform/totp';
 import { JobsService } from '../src/jobs/jobs.service';
@@ -6147,7 +6156,7 @@ describe('Abonnement des structures', () => {
       'enterprise',
     ]);
     const me = (await t.admin.api.get('/auth/me').expect(200)).body;
-    expect(me.subscription.features).toHaveLength(13);
+    expect(me.subscription.features).toHaveLength(15);
     await t.admin.api.get('/stats/overview').expect(200);
 
     // Engagement annuel : remise, et pas de retour au mensuel avant son terme.
@@ -8537,7 +8546,7 @@ describe('Espace éditeur (super administrateur)', () => {
       planCode: 'base',
     });
     // Essai : toutes les fonctionnalités, quotas de la formule d'essai.
-    expect(sub.features).toHaveLength(13);
+    expect(sub.features).toHaveLength(15);
     expect(sub.usage.agents.limit).toBe(30);
     await sa
       .patch('/platform/settings', {
@@ -10575,5 +10584,1140 @@ describe('Supervision (console éditeur)', () => {
     expect(s.availability).toEqual({ configured: false });
     expect(s.errors).toEqual({ configured: false });
     expect(s.server).toEqual({ configured: false });
+  });
+});
+
+describe('Formules : vente en camionnette et IA photo', () => {
+  async function editeur() {
+    const email = uniqueEmail('sa-formules');
+    await owner.query(
+      `INSERT INTO platform_admins (email, password_hash, first_name, last_name)
+       VALUES ($1, $2, 'Awa', 'Formules')`,
+      [email, await hashPassword('Editeur2026!')],
+    );
+    const login = await new Api(app)
+      .post('/platform/auth/login', { email, password: 'Editeur2026!' })
+      .expect(200);
+    return new Api(app, login.body.accessToken as string);
+  }
+
+  it('prérequis vérifiés et quota IA enregistré', async () => {
+    const sa = await editeur();
+    const code = `essai-${Date.now().toString(36)}`;
+    const base = {
+      code,
+      name: 'Essai modules',
+      description: 'Formule de test',
+      monthlyPrice: 50000,
+      includedAgents: 10,
+      includedLeads: 2,
+      extraAgentPrice: 3000,
+    };
+
+    // La vente en camionnette demande la prise de commande ; l'IA photo, les relevés produits.
+    for (const features of [
+      ['van_sales'],
+      ['points_of_sale', 'van_sales'],
+      ['photo_ai'],
+      ['points_of_sale', 'photo_ai'],
+    ]) {
+      await sa
+        .post('/platform/plans', { ...base, features })
+        .expect(400)
+        .expect((r) => expect(r.body.code).toBe('FEATURE_DEPENDENCY'));
+    }
+    await sa
+      .post('/platform/plans', {
+        ...base,
+        features: ['points_of_sale'],
+        photoAiMonthlyQuota: -1,
+      })
+      .expect(400);
+
+    const created = (
+      await sa
+        .post('/platform/plans', {
+          ...base,
+          features: [
+            'points_of_sale',
+            'orders',
+            'van_sales',
+            'product_audits',
+            'photo_ai',
+          ],
+          photoAiMonthlyQuota: 300,
+          photoAiExtraPrice: 2500,
+        })
+        .expect(201)
+    ).body;
+    expect(created).toMatchObject({
+      photoAiMonthlyQuota: 300,
+      photoAiExtraPrice: 2500,
+    });
+    expect(created.features).toEqual(
+      expect.arrayContaining(['van_sales', 'photo_ai']),
+    );
+
+    // Retirer un prérequis sans retirer la fonctionnalité qui en dépend : refusé.
+    await sa
+      .patch(`/platform/plans/${code}`, {
+        features: ['points_of_sale', 'product_audits', 'van_sales', 'photo_ai'],
+      })
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('FEATURE_DEPENDENCY'));
+    await sa
+      .patch(`/platform/plans/${code}`, { photoAiMonthlyQuota: 1000 })
+      .expect(200);
+    const plans = (await sa.get('/platform/plans').expect(200)).body as {
+      code: string;
+      photoAiMonthlyQuota: number;
+    }[];
+    expect(plans.find((p) => p.code === code)?.photoAiMonthlyQuota).toBe(1000);
+
+    await owner.query(`DELETE FROM plans WHERE code = $1`, [code]);
+  });
+});
+
+describe('Vente en camionnette', () => {
+  it('stock des dépôts et camions, ventes directes, crédit, paiements, caisse et reçu', async () => {
+    const t = await newTenant(app);
+    await t.createZone('Plateau', PLATEAU);
+    const agent = await t.createUser('agent');
+    const other = await t.createUser('agent');
+    const admin = t.admin.api;
+    const product = async (name: string) =>
+      (
+        await admin
+          .post('/products', {
+            name,
+            own: true,
+            format: '33 cl',
+            unit: 'Bouteille',
+            packagings: [{ name: 'Casier', units: 12 }],
+          })
+          .expect(201)
+      ).body as Body;
+    const coca = await product('Coca-Cola');
+    const fanta = await product('Fanta');
+    const detail = (
+      await admin
+        .post('/orders/price-lists', { name: 'Détaillant' })
+        .expect(201)
+    ).body as Body;
+    await admin
+      .put('/orders/prices', {
+        items: [
+          { priceListId: detail.id, productId: coca.id, price: 300 },
+          { priceListId: detail.id, productId: fanta.id, price: 250 },
+        ],
+      })
+      .expect(200);
+    const shop = (
+      await agent.api
+        .post('/outlets', {
+          name: 'Boutique Awa',
+          lat: IN_PLATEAU.lat,
+          lng: IN_PLATEAU.lng,
+          accuracy: 5,
+          force: true,
+        })
+        .expect(201)
+    ).body as Body;
+    let n = 0;
+    const uid = () =>
+      `00000000-0000-4000-8000-${String(++n).padStart(12, '0')}`;
+    const van = async () =>
+      (await agent.api.get('/van-sales/me').expect(200)).body as Body;
+    const vanQty = async (productId: string) =>
+      ((await van()).stock as Body[]).find((s) => s.productId === productId)
+        ?.quantity ?? 0;
+
+    // Emplacements : un dépôt, un camion par agent.
+    const depot = (
+      await admin
+        .post('/stock/locations', { kind: 'depot', name: 'Dépôt Yopougon' })
+        .expect(201)
+    ).body as Body;
+    await admin
+      .post('/stock/locations', {
+        kind: 'depot',
+        name: 'Dépôt bis',
+        agentId: agent.id,
+      })
+      .expect(400);
+    const truck = (
+      await admin
+        .post('/stock/locations', {
+          kind: 'van',
+          name: 'Camion 1',
+          plate: 'AB 1234 CI',
+          agentId: agent.id,
+        })
+        .expect(201)
+    ).body as Body;
+    expect(truck).toMatchObject({ kind: 'van', agentId: agent.id });
+    await admin
+      .post('/stock/locations', { kind: 'van', name: 'camion 1' })
+      .expect(409);
+    await admin
+      .post('/stock/locations', {
+        kind: 'van',
+        name: 'Camion 2',
+        agentId: agent.id,
+      })
+      .expect(409)
+      .expect((r) => expect(r.body.code).toBe('AGENT_HAS_VAN'));
+    await admin
+      .post('/stock/locations', {
+        kind: 'van',
+        name: 'Camion 3',
+        agentId: other.id,
+      })
+      .expect(201);
+    await agent.api
+      .post('/stock/locations', { kind: 'depot', name: 'X' })
+      .expect(403);
+    // L'agent voit son camion et les dépôts, pas le camion d'un autre.
+    expect(
+      ((await agent.api.get('/stock/locations').expect(200)).body as Body[])
+        .map((l) => l.name)
+        .sort(),
+    ).toEqual(['Camion 1', 'Dépôt Yopougon']);
+    expect(
+      (await other.api.get('/van-sales/me').expect(200)).body.van.name,
+    ).toBe('Camion 3');
+
+    // Entrée au dépôt, puis chargement du camion confirmé par l'agent.
+    await admin
+      .post('/stock/receipts', {
+        depotId: depot.id,
+        lines: [
+          { productId: coca.id, quantity: 100 },
+          { productId: fanta.id, quantity: 50 },
+        ],
+        note: 'Livraison usine',
+      })
+      .expect(201);
+    const load = (
+      await admin
+        .post('/stock/loads', {
+          depotId: depot.id,
+          vanId: truck.id,
+          lines: [
+            { productId: coca.id, quantity: 30 },
+            { productId: fanta.id, quantity: 10 },
+          ],
+        })
+        .expect(201)
+    ).body as Body;
+    expect(load).toMatchObject({ kind: 'load', status: 'pending' });
+    // 100 au dépôt, 30 déjà promis au camion : 70 disponibles.
+    await admin
+      .post('/stock/loads', {
+        depotId: depot.id,
+        vanId: truck.id,
+        lines: [{ productId: coca.id, quantity: 71 }],
+      })
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('INSUFFICIENT_STOCK'));
+    expect((await van()).pending).toHaveLength(1);
+    expect(await vanQty(coca.id)).toBe(0);
+    await other.api.post(`/stock/movements/${load.id}/confirm`, {}).expect(404);
+    // Deux bouteilles cassées pendant le chargement.
+    const confirmed = (
+      await agent.api
+        .post(`/stock/movements/${load.id}/confirm`, {
+          lines: [{ productId: coca.id, received: 28 }],
+        })
+        .expect(200)
+    ).body as Body;
+    expect(confirmed.status).toBe('done');
+    await agent.api.post(`/stock/movements/${load.id}/confirm`, {}).expect(409);
+    expect(await vanQty(coca.id)).toBe(28);
+    expect(await vanQty(fanta.id)).toBe(10);
+    const levels = (
+      await admin.get(`/stock/levels?locationId=${depot.id}`).expect(200)
+    ).body as Body;
+    expect(
+      (levels.products as Body[]).find((p) => p.id === coca.id)!.quantities,
+    ).toEqual({ [depot.id]: 70 });
+
+    // Vente payée sur place : stock du camion vérifié, prix du serveur, idempotente.
+    const s1Body = {
+      clientId: uid(),
+      outletId: shop.id,
+      lines: [{ productId: coca.id, quantity: 12 }],
+      paidAmount: 3600,
+      paymentMethod: 'cash',
+      lat: IN_PLATEAU.lat,
+      lng: IN_PLATEAU.lng,
+    };
+    const s1 = (await agent.api.post('/van-sales/sales', s1Body).expect(201))
+      .body as Body;
+    expect(s1).toMatchObject({
+      kind: 'sale',
+      status: 'paid',
+      total: 3600,
+      paidAmount: 3600,
+      due: 0,
+      locationName: 'Camion 1',
+      flags: [],
+    });
+    expect(
+      (
+        (await agent.api.post('/van-sales/sales', s1Body).expect(201))
+          .body as Body
+      ).id,
+    ).toBe(s1.id);
+    expect(await vanQty(coca.id)).toBe(16);
+    await agent.api
+      .post('/van-sales/sales', {
+        clientId: uid(),
+        outletId: shop.id,
+        lines: [{ productId: coca.id, quantity: 20 }],
+        paidAmount: 6000,
+        paymentMethod: 'cash',
+      })
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('INSUFFICIENT_STOCK'));
+    await agent.api
+      .post('/van-sales/sales', {
+        clientId: uid(),
+        outletId: shop.id,
+        lines: [{ productId: coca.id, quantity: 1 }],
+        paidAmount: 300,
+      })
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('PAYMENT_METHOD_REQUIRED'));
+    await other.api
+      .post('/van-sales/sales', s1Body)
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('INSUFFICIENT_STOCK'));
+
+    // Crédit : refusé sans plafond ; plafond fixé par l'administrateur seul.
+    const credit = (quantity: number, paidAmount: number, soldAt?: string) => ({
+      clientId: uid(),
+      outletId: shop.id,
+      lines: [{ productId: coca.id, quantity }],
+      paidAmount,
+      ...(paidAmount ? { paymentMethod: 'cash' } : {}),
+      ...(soldAt ? { soldAt } : {}),
+    });
+    await agent.api
+      .post('/van-sales/sales', credit(6, 0))
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('CREDIT_NOT_ALLOWED'));
+    await agent.api
+      .put(`/van-sales/outlets/${shop.id}/credit-limit`, { limit: 3000 })
+      .expect(403);
+    expect(
+      (
+        await admin
+          .put(`/van-sales/outlets/${shop.id}/credit-limit`, { limit: 3000 })
+          .expect(200)
+      ).body,
+    ).toMatchObject({ creditLimit: 3000, outstanding: 0, available: 3000 });
+    const s3 = (
+      await agent.api.post('/van-sales/sales', credit(6, 800)).expect(201)
+    ).body as Body;
+    expect(s3).toMatchObject({ status: 'delivered', total: 1800, due: 1000 });
+    await agent.api
+      .post('/van-sales/sales', credit(10, 0))
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('CREDIT_LIMIT_EXCEEDED'));
+
+    // Vente arrivée après une coupure de réseau : enregistrée, mais signalée.
+    const tenMinutesAgo = new Date(Date.now() - 10 * 60_000).toISOString();
+    const s4 = (
+      await agent.api
+        .post('/van-sales/sales', credit(20, 0, tenMinutesAgo))
+        .expect(201)
+    ).body as Body;
+    expect(s4).toMatchObject({ status: 'delivered', due: 6000 });
+    expect((s4.flags as string[]).sort()).toEqual([
+      'negative_stock',
+      'over_credit_limit',
+    ]);
+    expect(await vanQty(coca.id)).toBe(-10);
+    const alerts = (await admin.get('/notifications').expect(200)).body;
+    expect(JSON.stringify(alerts)).toContain('Vente à vérifier');
+    expect(
+      (await agent.api.get(`/van-sales/outlets/${shop.id}/balance`).expect(200))
+        .body,
+    ).toMatchObject({ outstanding: 7000, available: 0 });
+
+    // Paiement d'une dette : la plus ancienne d'abord (la vente hors ligne).
+    const payBody = {
+      clientId: uid(),
+      outletId: shop.id,
+      amount: 500,
+      method: 'mobile_money',
+    };
+    const p1 = (
+      await agent.api.post('/van-sales/payments', payBody).expect(201)
+    ).body as Body;
+    expect(p1.allocations).toEqual([
+      expect.objectContaining({ orderId: s4.id, amount: 500 }),
+    ]);
+    expect(
+      (
+        (await agent.api.post('/van-sales/payments', payBody).expect(201))
+          .body as Body
+      ).id,
+    ).toBe(p1.id);
+    await agent.api
+      .post('/van-sales/payments', {
+        ...payBody,
+        clientId: uid(),
+        amount: 8000,
+      })
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('OVERPAYMENT'));
+
+    // Une vente directe ne s'annule pas comme une commande ; annulation par un responsable.
+    await agent.api
+      .post(`/orders/${s1.id}/status`, { status: 'cancelled', comment: 'x' })
+      .expect(409)
+      .expect((r) => expect(r.body.code).toBe('SALE_CANCEL_REQUIRED'));
+    await agent.api
+      .post(`/van-sales/sales/${s1.id}/cancel`, { reason: 'Erreur' })
+      .expect(403);
+    const cancelled = (
+      await admin
+        .post(`/van-sales/sales/${s1.id}/cancel`, {
+          reason: 'Saisie en double',
+        })
+        .expect(200)
+    ).body as Body;
+    expect(cancelled.status).toBe('cancelled');
+    expect(await vanQty(coca.id)).toBe(2);
+
+    // Caisse : espèces encaissées (la vente annulée est rendue), mobile money, reste dû.
+    const cash = (await agent.api.get('/van-sales/cash').expect(200))
+      .body as Body;
+    expect(cash.agents).toEqual([
+      expect.objectContaining({
+        agentId: agent.id,
+        vanName: 'Camion 1',
+        salesCount: 2,
+        salesAmount: 7800,
+        dueOnSales: 6500,
+        cash: 800,
+        mobileMoney: 500,
+        cashBalance: 800,
+      }),
+    ]);
+    await agent.api.get(`/van-sales/cash?agentId=${other.id}`).expect(403);
+    await agent.api
+      .post('/van-sales/remittances', { agentId: agent.id, amount: 800 })
+      .expect(403);
+    await admin
+      .post('/van-sales/remittances', { agentId: agent.id, amount: 1000 })
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('REMITTANCE_TOO_HIGH'));
+    expect(
+      (
+        await admin
+          .post('/van-sales/remittances', { agentId: agent.id, amount: 800 })
+          .expect(201)
+      ).body.cashBalance,
+    ).toBe(0);
+
+    // « Payée » sur une vente à crédit : le reste est encaissé et entre dans la caisse.
+    const paid = (
+      await agent.api
+        .post(`/orders/${s3.id}/status`, { status: 'paid', method: 'cash' })
+        .expect(200)
+    ).body as Body;
+    expect(paid).toMatchObject({ status: 'paid', paidAmount: 1800, due: 0 });
+    expect(
+      ((await agent.api.get('/van-sales/cash').expect(200)).body as Body)
+        .agents[0].cashBalance,
+    ).toBe(1000);
+    expect(
+      (
+        (await admin.get('/orders?kind=sale').expect(200)).body.items as Body[]
+      ).map((o) => o.id),
+    ).toHaveLength(3);
+
+    // Reçu PDF.
+    const binary = (
+      res: NodeJS.ReadableStream,
+      cb: (e: Error | null, b: Buffer) => void,
+    ) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => cb(null, Buffer.concat(chunks)));
+    };
+    const pdf = await agent.api
+      .get(`/van-sales/orders/${s4.id}/receipt`)
+      .buffer(true)
+      .parse(binary as never)
+      .expect(200)
+      .expect('Content-Type', /application\/pdf/);
+    expect((pdf.body as Buffer).subarray(0, 4).toString()).toBe('%PDF');
+    // Comme la commande : visible par qui voit le point de vente, jamais sans compte.
+    await new Api(app).get(`/van-sales/orders/${s4.id}/receipt`).expect(401);
+
+    // Casse (motif obligatoire), retour au dépôt confirmé par un responsable, inventaire.
+    await agent.api
+      .post('/stock/losses', {
+        clientId: uid(),
+        lines: [{ productId: fanta.id, quantity: 1 }],
+      })
+      .expect(400);
+    await agent.api
+      .post('/stock/losses', {
+        clientId: uid(),
+        lines: [{ productId: fanta.id, quantity: 1 }],
+        note: 'Bouteille cassée',
+      })
+      .expect(201);
+    const unload = (
+      await agent.api
+        .post('/stock/unloads', {
+          clientId: uid(),
+          depotId: depot.id,
+          lines: [{ productId: fanta.id, quantity: 9 }],
+        })
+        .expect(201)
+    ).body as Body;
+    await agent.api
+      .post(`/stock/movements/${unload.id}/confirm`, {})
+      .expect(403);
+    await admin.post(`/stock/movements/${unload.id}/confirm`, {}).expect(200);
+    expect(await vanQty(fanta.id)).toBe(0);
+    const inventory = (
+      await admin
+        .post('/stock/inventories', {
+          locationId: depot.id,
+          lines: [
+            { productId: coca.id, counted: 68 },
+            { productId: fanta.id, counted: 49 },
+          ],
+          note: 'Comptage du soir',
+        })
+        .expect(201)
+    ).body as Body;
+    expect(inventory.differences).toBe(1);
+    const depotNow = (
+      await admin.get(`/stock/levels?locationId=${depot.id}`).expect(200)
+    ).body.products as Body[];
+    expect(depotNow.find((p) => p.id === coca.id)!.total).toBe(68);
+    expect(depotNow.find((p) => p.id === fanta.id)!.total).toBe(49);
+
+    // L'agent ne voit que les mouvements de son camion.
+    const kinds = (
+      (await agent.api.get('/stock/movements?limit=100').expect(200)).body
+        .items as Body[]
+    ).map((m) => m.kind);
+    expect([...new Set(kinds)].sort()).toEqual([
+      'load',
+      'loss',
+      'sale',
+      'sale_cancel',
+      'unload',
+    ]);
+
+    // Formule sans vente en camionnette : tout est fermé.
+    await owner.query(
+      `UPDATE subscriptions SET plan_code = 'advanced', status = 'active', trial_ends_at = NULL WHERE tenant_id = $1`,
+      [t.tenantId],
+    );
+    app.get(SubscriptionsService).invalidate(t.tenantId);
+    await admin.get('/stock/locations').expect(402);
+    await agent.api.get('/van-sales/me').expect(402);
+  });
+});
+
+describe('Photos rangées hors de la base', () => {
+  it('nouvelle photo dans le dossier, anciennes recopiées sans changer l’affichage', async () => {
+    const t = await newTenant(app);
+    const agent = await t.createUser('agent');
+    const storage = app.get(FileStorage);
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    const binary = (
+      res: NodeJS.ReadableStream,
+      cb: (e: Error | null, b: Buffer) => void,
+    ) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => cb(null, Buffer.concat(chunks)));
+    };
+    const fetch = async (id: string) =>
+      (
+        await agent.api
+          .get(`/photos/${id}`)
+          .buffer(true)
+          .parse(binary as never)
+          .expect(200)
+      ).body as Buffer;
+
+    // Nouvelle photo : le fichier dans le dossier de la structure, rien en base.
+    const clientId = randomUUID();
+    const sent = () =>
+      request(app.getHttpServer())
+        .post('/api/photos')
+        .set('Authorization', `Bearer ${agent.api.token}`)
+        .attach('file', png, 'devanture.png')
+        .field('clientId', clientId)
+        .field('takenAt', new Date().toISOString())
+        .expect(201);
+    const photo = (await sent()).body as { id: string };
+    const [row] = await owner.query<
+      { key: string; data: Buffer | null; size: number }[]
+    >(
+      `SELECT storage_key AS key, data, size FROM submission_photos WHERE id = $1`,
+      [photo.id],
+    );
+    expect(row.data).toBeNull();
+    expect(row.key).toBe(`photos/${t.tenantId}/${photo.id}.png`);
+    const onDisk = readFileSync(`${storage.root}/${row.key}`);
+    expect(onDisk.length).toBe(row.size);
+    expect((await fetch(photo.id)).equals(onDisk)).toBe(true);
+    // Renvoi du même cliché (réseau coupé) : la même photo, pas de second fichier.
+    expect(((await sent()).body as { id: string }).id).toBe(photo.id);
+
+    // Photo d'avant le dossier : encore en base, lisible, puis recopiée et effacée de la base.
+    const [legacy] = await owner.query<{ id: string }[]>(
+      `INSERT INTO submission_photos (tenant_id, agent_id, client_id, data, mime, size, taken_at)
+       VALUES ($1, $2, $3, $4, 'image/png', $5, now()) RETURNING id`,
+      [t.tenantId, agent.id, randomUUID(), png, png.length],
+    );
+    expect((await fetch(legacy.id)).equals(png)).toBe(true);
+    expect(
+      await app.get(PhotosService).moveLegacyPhotos(),
+    ).toBeGreaterThanOrEqual(1);
+    const [moved] = await owner.query<{ key: string; data: Buffer | null }[]>(
+      `SELECT storage_key AS key, data FROM submission_photos WHERE id = $1`,
+      [legacy.id],
+    );
+    expect(moved.data).toBeNull();
+    expect(readFileSync(`${storage.root}/${moved.key}`).equals(png)).toBe(true);
+    expect((await fetch(legacy.id)).equals(png)).toBe(true);
+    // Rien d'autre à recopier.
+    expect(await app.get(PhotosService).moveLegacyPhotos()).toBe(0);
+
+    // Les photos d'une structure supprimée partent avec elle.
+    await storage.removeTree(`photos/${t.tenantId}`);
+    expect(existsSync(`${storage.root}/photos/${t.tenantId}`)).toBe(false);
+    await agent.api.get(`/photos/${photo.id}`).expect(404);
+  });
+});
+
+describe('IA photo', () => {
+  it('photo de rayon analysée, quota et supplément, réessais, droits', async () => {
+    const t = await newTenant(app);
+    const agent = await t.createUser('agent');
+    const other = await newTenant(app);
+    const ai = app.get(PhotoAiService);
+    const fake = app.get<PhotoAiProviders>(PHOTO_AI_PROVIDER).fake!;
+    fake.fail = null;
+    fake.next = null;
+    const admin = t.admin.api;
+    const coca = (
+      await admin
+        .post('/products', {
+          name: 'Coca-Cola',
+          own: true,
+          format: '33 cl',
+          unit: 'Bouteille',
+        })
+        .expect(201)
+    ).body as Body;
+    const pepsi = (
+      await admin
+        .post('/products', {
+          name: 'Pepsi',
+          own: false,
+          format: '33 cl',
+          unit: 'Bouteille',
+        })
+        .expect(201)
+    ).body as Body;
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    const upload = async (kind?: string) => {
+      const r = request(app.getHttpServer())
+        .post('/api/photos')
+        .set('Authorization', `Bearer ${agent.api.token}`)
+        .attach('file', png, 'rayon.png')
+        .field('clientId', randomUUID())
+        .field('takenAt', new Date().toISOString());
+      if (kind) void r.field('kind', kind);
+      return ((await r.expect(201)).body as { id: string }).id;
+    };
+    // Quota de la formule de la structure (l'essai prend celui de la formule d'essai).
+    const [{ planCode }] = await owner.query<{ planCode: string }[]>(
+      `SELECT CASE WHEN s.status = 'trialing' THEN ps.trial_plan_code ELSE s.plan_code END AS "planCode"
+       FROM subscriptions s CROSS JOIN platform_settings ps WHERE s.tenant_id = $1`,
+      [t.tenantId],
+    );
+    const [{ quota: before }] = await owner.query<{ quota: number }[]>(
+      `SELECT photo_ai_monthly_quota AS quota FROM plans WHERE code = $1`,
+      [planCode],
+    );
+    await owner.query(
+      `UPDATE plans SET photo_ai_monthly_quota = 1 WHERE code = $1`,
+      [planCode],
+    );
+    app.get(SubscriptionsService).invalidateAll();
+    try {
+      // Photo de rayon : mise en file puis analysée ; produits par leur identifiant.
+      const shelf = await upload('shelf');
+      expect(
+        (await agent.api.get(`/photo-ai/photos/${shelf}`).expect(200)).body
+          .status,
+      ).toBe('pending');
+      expect(await ai.processQueue()).toBe(1);
+      const done = (
+        await agent.api.get(`/photo-ai/photos/${shelf}`).expect(200)
+      ).body as Body;
+      expect(done).toMatchObject({ status: 'done', model: 'fake' });
+      expect(done.result.shelfScore).toBe(80);
+      expect(done.result.products).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            productId: coca.id,
+            present: true,
+            facings: 4,
+          }),
+          expect.objectContaining({ productId: pepsi.id, present: false }),
+        ]),
+      );
+      // Une photo ordinaire n'est pas analysée.
+      const plain = await upload();
+      await agent.api.get(`/photo-ai/photos/${plain}`).expect(404);
+
+      // Quota atteint (1 photo) : la suivante est gardée, sans analyse.
+      expect(
+        (await agent.api.get('/photo-ai/usage').expect(200)).body,
+      ).toMatchObject({
+        quota: 1,
+        used: 1,
+        remaining: 0,
+        bonus: 0,
+        auto: true,
+        configured: true,
+      });
+      const over = await upload('shelf');
+      await ai.processQueue();
+      expect(
+        (await agent.api.get(`/photo-ai/photos/${over}`).expect(200)).body,
+      ).toMatchObject({
+        status: 'skipped',
+        skipReason: 'quota',
+        skipLabel: 'Quota mensuel de photos analysées atteint',
+      });
+
+      // L'éditeur accorde 3 photos ce mois-ci ; le responsable relance l'analyse.
+      const email = uniqueEmail('sa-ia');
+      await owner.query(
+        `INSERT INTO platform_admins (email, password_hash, first_name, last_name)
+         VALUES ($1, $2, 'Awa', 'IA')`,
+        [email, await hashPassword('Editeur2026!')],
+      );
+      const sa = new Api(
+        app,
+        (
+          await new Api(app)
+            .post('/platform/auth/login', { email, password: 'Editeur2026!' })
+            .expect(200)
+        ).body.accessToken as string,
+      );
+      expect(
+        (
+          await sa
+            .put(`/platform/tenants/${t.tenantId}/photo-ai-bonus`, {
+              photos: 3,
+              note: 'Essai client',
+            })
+            .expect(200)
+        ).body,
+      ).toMatchObject({ bonus: 3, remaining: 3 });
+      await agent.api.post(`/photo-ai/photos/${over}/analyze`).expect(403);
+      await admin.post(`/photo-ai/photos/${over}/analyze`).expect(202);
+      await ai.processQueue();
+      expect(
+        (await agent.api.get(`/photo-ai/photos/${over}`).expect(200)).body
+          .status,
+      ).toBe('done');
+      const config = (
+        await sa.get(`/platform/tenants/${t.tenantId}/config`).expect(200)
+      ).body as Body;
+      expect(
+        (config.features as Body[]).find((f) => f.feature === 'photo_ai')!
+          .usage,
+      ).toBe('2 / 4 photos analysées ce mois-ci');
+
+      // Erreur passagère : nouvel essai plus tard ; erreur définitive : abandon.
+      fake.fail = new Error('Réseau indisponible');
+      const flaky = await upload('shelf');
+      await ai.processQueue();
+      expect(
+        (await agent.api.get(`/photo-ai/photos/${flaky}`).expect(200)).body,
+      ).toMatchObject({
+        status: 'pending',
+        attempts: 1,
+        error: 'Réseau indisponible',
+      });
+      fake.fail = null;
+      await ai.processQueue();
+      // Pas avant le délai (1 minute)…
+      expect(
+        (await agent.api.get(`/photo-ai/photos/${flaky}`).expect(200)).body
+          .status,
+      ).toBe('pending');
+      await owner.query(
+        `UPDATE photo_analyses SET next_attempt_at = now() WHERE photo_id = $1`,
+        [flaky],
+      );
+      await ai.processQueue();
+      expect(
+        (await agent.api.get(`/photo-ai/photos/${flaky}`).expect(200)).body,
+      ).toMatchObject({ status: 'done', attempts: 2 });
+      fake.fail = new PermanentAnalysisError('Analyse refusée par le modèle');
+      const refused = await upload('shelf');
+      await ai.processQueue();
+      expect(
+        (await agent.api.get(`/photo-ai/photos/${refused}`).expect(200)).body,
+      ).toMatchObject({ status: 'failed', attempts: 1 });
+      fake.fail = null;
+
+      // Analyse automatique coupée : la photo de rayon reste une photo.
+      await owner.query(
+        `UPDATE tenant_settings SET photo_ai_auto = false WHERE tenant_id = $1`,
+        [t.tenantId],
+      );
+      const manual = await upload('shelf');
+      await agent.api.get(`/photo-ai/photos/${manual}`).expect(404);
+
+      // Une autre structure ne voit rien ; sans la fonction dans la formule : fermé.
+      await other.admin.api.get(`/photo-ai/photos/${shelf}`).expect(404);
+      await owner.query(
+        `UPDATE subscriptions SET plan_code = 'advanced', status = 'active', trial_ends_at = NULL WHERE tenant_id = $1`,
+        [t.tenantId],
+      );
+      app.get(SubscriptionsService).invalidate(t.tenantId);
+      await agent.api.get('/photo-ai/usage').expect(402);
+    } finally {
+      await owner.query(
+        `UPDATE plans SET photo_ai_monthly_quota = $2 WHERE code = $1`,
+        [planCode, before],
+      );
+      app.get(SubscriptionsService).invalidateAll();
+      fake.fail = null;
+    }
+  });
+  it('fournisseur choisi par l’éditeur, photo de référence, statistiques des rayons', async () => {
+    const t = await newTenant(app);
+    const agent = await t.createUser('agent');
+    const ai = app.get(PhotoAiService);
+    const fake = app.get<PhotoAiProviders>(PHOTO_AI_PROVIDER).fake!;
+    fake.fail = null;
+    fake.next = null;
+    const admin = t.admin.api;
+    const email = uniqueEmail('sa-ia');
+    await owner.query(
+      `INSERT INTO platform_admins (email, password_hash, first_name, last_name)
+       VALUES ($1, $2, 'Awa', 'IA')`,
+      [email, await hashPassword('Editeur2026!')],
+    );
+    const sa = new Api(
+      app,
+      (
+        await new Api(app)
+          .post('/platform/auth/login', { email, password: 'Editeur2026!' })
+          .expect(200)
+      ).body.accessToken as string,
+    );
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    const upload = async () =>
+      (
+        (
+          await request(app.getHttpServer())
+            .post('/api/photos')
+            .set('Authorization', `Bearer ${agent.api.token}`)
+            .attach('file', png, 'rayon.png')
+            .field('clientId', randomUUID())
+            .field('takenAt', new Date().toISOString())
+            .field('kind', 'shelf')
+            .expect(201)
+        ).body as { id: string }
+      ).id;
+    const [{ before }] = await owner.query<{ before: string }[]>(
+      `SELECT photo_ai_provider AS before FROM platform_settings WHERE id = 1`,
+    );
+    try {
+      // Console : fournisseurs branchés (IA simulée ici : tous), choix de l'actif.
+      const overview = (await sa.get('/platform/photo-ai').expect(200))
+        .body as Body;
+      expect(overview.providers).toEqual([
+        expect.objectContaining({ id: 'anthropic', configured: true }),
+        expect.objectContaining({ id: 'mistral', configured: true }),
+      ]);
+      await sa
+        .patch('/platform/settings', { photoAiProvider: 'chatgpt' })
+        .expect(400);
+      await sa
+        .patch('/platform/settings', { photoAiProvider: 'mistral' })
+        .expect(200);
+      expect((await sa.get('/platform/photo-ai').expect(200)).body.choice).toBe(
+        'mistral',
+      );
+
+      // Photo de référence d'un produit : envoyée à l'IA, visible de toute l'équipe.
+      const coca = (
+        await admin
+          .post('/products', {
+            name: 'Coca-Cola',
+            own: true,
+            format: '33 cl',
+            unit: 'Bouteille',
+          })
+          .expect(201)
+      ).body as Body;
+      const pepsi = (
+        await admin
+          .post('/products', {
+            name: 'Pepsi',
+            own: false,
+            format: '33 cl',
+            unit: 'Bouteille',
+          })
+          .expect(201)
+      ).body as Body;
+      const putReference = () =>
+        request(app.getHttpServer())
+          .put(`/api/photo-ai/products/${coca.id as string}/reference`)
+          .set('Authorization', `Bearer ${admin.token}`)
+          .attach('file', png, 'coca.png');
+      const first = ((await putReference().expect(200)).body as Body)
+        .referencePhotoId as string;
+      const second = ((await putReference().expect(200)).body as Body)
+        .referencePhotoId as string;
+      // L'ancienne photo de référence est supprimée.
+      expect(
+        await owner.query(`SELECT 1 FROM submission_photos WHERE id = $1`, [
+          first,
+        ]),
+      ).toHaveLength(0);
+      expect(
+        ((await admin.get('/products').expect(200)).body as Body[]).find(
+          (p) => p.id === coca.id,
+        )?.referencePhotoId,
+      ).toBe(second);
+      await agent.api.get(`/photos/${second}`).expect(200);
+      await agent.api
+        .put(`/photo-ai/products/${coca.id as string}/reference`)
+        .expect(403);
+
+      // Analyse : fournisseur choisi enregistré, références transmises, noms des produits.
+      fake.next = () => ({
+        products: [
+          {
+            productId: coca.id as string,
+            present: true,
+            facings: 6,
+            price: 300,
+            confidence: 'high',
+          },
+          {
+            productId: pepsi.id as string,
+            present: true,
+            facings: 2,
+            price: 250,
+            confidence: 'medium',
+          },
+        ],
+        others: [{ name: 'Fanta', brand: null, facings: 2 }],
+        shelfScore: 70,
+        notes: 'Rayon correct.',
+      });
+      const shelf = await upload();
+      await ai.processQueue();
+      expect(fake.last?.references?.map((r) => r.productId)).toEqual([coca.id]);
+      const analysis = (
+        await admin.get(`/photo-ai/photos/${shelf}`).expect(200)
+      ).body as Body;
+      expect(analysis).toMatchObject({
+        status: 'done',
+        provider: 'mistral',
+        products: {
+          [coca.id as string]: {
+            name: 'Coca-Cola',
+            format: '33 cl',
+            own: true,
+          },
+        },
+      });
+
+      // Statistiques : part de rayon = 6 faces sur 10, présence par produit.
+      fake.next = () => ({
+        products: [
+          {
+            productId: coca.id as string,
+            present: false,
+            facings: null,
+            price: null,
+            confidence: 'high',
+          },
+        ],
+        others: [],
+        shelfScore: 20,
+        notes: 'Rupture.',
+      });
+      await upload();
+      await ai.processQueue();
+      const stats = (await admin.get('/photo-ai/stats').expect(200))
+        .body as Body;
+      expect(stats).toMatchObject({ analyses: 2, avgScore: 45, share: 60 });
+      expect(
+        (stats.products as Body[]).find((p) => p.productId === coca.id),
+      ).toMatchObject({ presence: 50, avgFacings: 6, avgPrice: 300 });
+      await agent.api.get('/photo-ai/stats').expect(403);
+
+      // Analyse demandée sur une photo ordinaire : elle devient photo de rayon.
+      const plain = (
+        (
+          await request(app.getHttpServer())
+            .post('/api/photos')
+            .set('Authorization', `Bearer ${agent.api.token}`)
+            .attach('file', png, 'photo.png')
+            .field('clientId', randomUUID())
+            .field('takenAt', new Date().toISOString())
+            .expect(201)
+        ).body as { id: string }
+      ).id;
+      await admin.post(`/photo-ai/photos/${plain}/analyze`).expect(202);
+      // Chef d'une autre équipe : pas de relance (elle consommerait le quota).
+      await t.settings({ useGroups: true });
+      const otherLead = await t.createUser('team_lead');
+      await t.createGroup('Autre équipe', otherLead.id, [], []);
+      // Photo d'une visite de point de vente : visible de l'équipe, mais pas relançable.
+      const shop = (
+        await admin
+          .post('/outlets', { name: 'Boutique IA', lat: 5.32, lng: -4.02 })
+          .expect(201)
+      ).body as Body;
+      await owner.query(
+        `UPDATE submission_photos SET outlet_id = $2 WHERE id = $1`,
+        [plain, shop.id],
+      );
+      await otherLead.api.get(`/photo-ai/photos/${plain}`).expect(200);
+      await otherLead.api.post(`/photo-ai/photos/${plain}/analyze`).expect(404);
+      await t.settings({ useGroups: false });
+      const [{ kind }] = await owner.query<{ kind: string }[]>(
+        `SELECT kind FROM submission_photos WHERE id = $1`,
+        [plain],
+      );
+      expect(kind).toBe('shelf');
+
+      // Champ photo « rayon » d'un formulaire : la photo envoyée avec le formulaire est
+      // analysée, sans que l'app l'ait marquée.
+      const shelfForm = (
+        await admin
+          .post('/mission-types', {
+            name: 'Relevé rayon',
+            fields: [
+              {
+                key: 'rayon',
+                label: 'Photo du rayon',
+                type: 'photo',
+                required: true,
+                shelf: true,
+              },
+              {
+                key: 'devanture',
+                label: 'Devanture',
+                type: 'photo',
+                required: false,
+              },
+            ],
+          })
+          .expect(201)
+      ).body as Body;
+      expect((shelfForm.fields as Body[])[0].shelf).toBe(true);
+      const zone = await t.createZone('Plateau', PLATEAU);
+      const mission = (
+        await admin
+          .post('/missions', {
+            typeId: shelfForm.id,
+            title: 'Rayons',
+            progressMethod: 'count',
+            targetValue: 5,
+            zoneIds: [zone.id],
+          })
+          .expect(201)
+      ).body as Body;
+      await t.settings({ submissionRequiresDay: false });
+      const plainUpload = async () =>
+        (
+          (
+            await request(app.getHttpServer())
+              .post('/api/photos')
+              .set('Authorization', `Bearer ${agent.api.token}`)
+              .attach('file', png, 'photo.png')
+              .field('clientId', randomUUID())
+              .field('takenAt', new Date().toISOString())
+              .expect(201)
+          ).body as { id: string }
+        ).id;
+      const rayonPhoto = await plainUpload();
+      const devanture = await plainUpload();
+      await agent.api
+        .post(`/missions/${mission.id as string}/submissions`, {
+          clientId: randomUUID(),
+          data: { rayon: rayonPhoto, devanture },
+          submittedAt: new Date().toISOString(),
+        })
+        .expect(201);
+      await ai.processQueue();
+      expect(
+        (await admin.get(`/photo-ai/photos/${rayonPhoto}`).expect(200)).body,
+      ).toMatchObject({ status: 'done', provider: 'mistral' });
+      await admin.get(`/photo-ai/photos/${devanture}`).expect(404);
+
+      // IA coupée par l'éditeur : la photo est gardée sans analyse.
+      await sa
+        .patch('/platform/settings', { photoAiProvider: 'off' })
+        .expect(200);
+      expect(
+        ((await admin.get('/photo-ai/usage').expect(200)).body as Body)
+          .configured,
+      ).toBe(false);
+      const off = await upload();
+      await ai.processQueue();
+      expect(
+        (await admin.get(`/photo-ai/photos/${off}`).expect(200)).body,
+      ).toMatchObject({
+        status: 'skipped',
+        skipLabel: 'IA photo non configurée',
+      });
+
+      // Retrait de la photo de référence.
+      await admin
+        .delete(`/photo-ai/products/${coca.id as string}/reference`)
+        .expect(204);
+      expect(
+        await owner.query(`SELECT 1 FROM submission_photos WHERE id = $1`, [
+          second,
+        ]),
+      ).toHaveLength(0);
+    } finally {
+      await owner.query(
+        `UPDATE platform_settings SET photo_ai_provider = $1 WHERE id = 1`,
+        [before],
+      );
+      fake.next = null;
+    }
   });
 });

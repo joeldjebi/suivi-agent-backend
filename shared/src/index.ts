@@ -9,3 +9,5 @@ export * from './onboarding-slides';
 export * from './outlets';
 export * from './products';
 export * from './orders';
+export * from './van-sales';
+export * from './photo-ai';

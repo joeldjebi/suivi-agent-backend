@@ -1,3 +1,4 @@
+import { PhotoAiService } from '../photo-ai/photo-ai.service';
 import { Injectable } from '@nestjs/common';
 import {
   Feature,
@@ -97,6 +98,7 @@ export class MissionsService {
     private readonly photos: PhotosService,
     private readonly outlets: OutletsService,
     private readonly products: ProductsService,
+    private readonly photoAi: PhotoAiService,
   ) {}
 
   async list(user: AuthUser, query: ListMissionsQuery) {
@@ -660,6 +662,8 @@ export class MissionsService {
     });
     await this.photos.attach(saved.id, photoIds);
     await this.products.saveReadings(saved, type.fields);
+    // Photos de rayon : analysées par l'IA photo (en arrière-plan).
+    await this.photoAi.enqueueFormPhotos(user, type.fields, data);
     if (visit) {
       if (visit.outlet.lat == null && dto.lat != null && dto.lng != null)
         await this.outlets.locateFromVisit(

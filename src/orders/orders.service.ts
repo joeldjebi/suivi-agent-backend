@@ -3,7 +3,9 @@ import type { EntityManager } from 'typeorm';
 import {
   ORDER_STATUS_LABELS,
   ORDER_TRANSITIONS,
+  OrderKind,
   OrderStatus,
+  PaymentMethod,
   Role,
   orderNumber,
 } from '@suivi/shared';
@@ -18,6 +20,7 @@ import {
 import { DbService } from '../common/db.service';
 import { PlatformSettings } from '../entities';
 import { distanceM, OutletsService } from '../outlets/outlets.service';
+import { PaymentsService } from './payments.service';
 import type {
   ChangeOrderStatusDto,
   CreateOrderDto,
@@ -39,6 +42,7 @@ export interface PriceList {
 interface OrderRow {
   id: string;
   number: number;
+  kind: OrderKind;
   outletId: string;
   outletName: string;
   agentId: string;
@@ -46,7 +50,14 @@ interface OrderRow {
   priceListName: string | null;
   status: OrderStatus;
   total: number;
+  /** Déjà payé (paiements partiels compris) */
+  paidAmount: number;
   currency: string;
+  /** Camion de la vente directe */
+  locationId: string | null;
+  locationName: string | null;
+  /** Signalements (vente enregistrée sans réseau) */
+  flags: string[];
   note: string | null;
   distance: number | null;
   takenAt: Date;
@@ -58,9 +69,11 @@ interface OrderRow {
 }
 
 const ORDER_SELECT = `
-  o.id, o.number, o.outlet_id AS "outletId", ol.name AS "outletName",
+  o.id, o.number, o.kind, o.outlet_id AS "outletId", ol.name AS "outletName",
   o.agent_id AS "agentId", trim(u.first_name || ' ' || u.last_name) AS "agentName",
-  o.price_list_name AS "priceListName", o.status, o.total::float8 AS total, o.currency,
+  o.price_list_name AS "priceListName", o.status, o.total::float8 AS total,
+  o.paid_amount::float8 AS "paidAmount", o.currency,
+  o.location_id AS "locationId", sl.name AS "locationName", o.flags,
   o.note, o.distance_m AS distance, o.taken_at AS "takenAt",
   o.delivered_at AS "deliveredAt", o.paid_at AS "paidAt", o.cancelled_at AS "cancelledAt",
   o.cancel_reason AS "cancelReason",
@@ -68,9 +81,26 @@ const ORDER_SELECT = `
 const ORDER_FROM = `
   FROM orders o
   JOIN outlets ol ON ol.id = o.outlet_id
-  JOIN users u ON u.id = o.agent_id`;
+  JOIN users u ON u.id = o.agent_id
+  LEFT JOIN stock_locations sl ON sl.id = o.location_id`;
 
-const view = (r: OrderRow) => ({ ...r, reference: orderNumber(r.number) });
+const view = (r: OrderRow) => ({
+  ...r,
+  reference: orderNumber(r.number),
+  /** Reste à payer */
+  due: Math.max(0, Math.round((r.total - r.paidAmount) * 100) / 100),
+});
+
+/** Ligne de commande ou de vente, prix calculés par le serveur. */
+export interface PricedLine {
+  productId: string;
+  name: string;
+  unit: string;
+  quantity: number;
+  unitPrice: number;
+  amount: number;
+  position: number;
+}
 
 /**
  * Prise de commande terrain : types de client (listes de tarifs) et prix définis par la
@@ -83,6 +113,7 @@ export class OrdersService {
     private readonly db: DbService,
     private readonly access: AccessService,
     private readonly outlets: OutletsService,
+    private readonly payments: PaymentsService,
   ) {}
 
   /** Chaque requête est déjà une transaction (RLS) : tout ce bloc est validé ou annulé ensemble. */
@@ -265,6 +296,97 @@ export class OrdersService {
 
   // ------------------------------------------------------------ commandes
 
+  /**
+   * Prix d'une commande ou d'une vente pour un point de vente : ceux de son type de client,
+   * calculés ici (jamais par le téléphone). Un produit saisi deux fois : quantités additionnées.
+   */
+  async price(
+    user: AuthUser,
+    outletId: string,
+    input: { productId: string; quantity: number }[],
+  ) {
+    const outlet = await this.outlets.findForVisit(user, outletId);
+    if (outlet.status === 'closed')
+      throw badRequest(
+        'OUTLET_CLOSED',
+        `« ${outlet.name} » est fermé : il ne peut plus commander`,
+      );
+    const catalog = await this.catalog(user, outletId);
+    if (!catalog.priceList)
+      throw badRequest(
+        'NO_PRICE_LIST',
+        'Aucun type de client n’est défini : demandez à votre administrateur de fixer les prix',
+      );
+    const priced = new Map(catalog.products.map((p) => [p.id as string, p]));
+    const quantities = new Map<string, number>();
+    for (const l of input)
+      quantities.set(
+        l.productId,
+        (quantities.get(l.productId) ?? 0) + l.quantity,
+      );
+    const lines: PricedLine[] = [...quantities].map(
+      ([productId, quantity], position) => {
+        const p = priced.get(productId);
+        if (!p)
+          throw badRequest(
+            'PRODUCT_NOT_PRICED',
+            'Un produit commandé n’a pas de prix pour ce type de client',
+          );
+        const unitPrice = Number(p.price);
+        return {
+          productId,
+          name: [p.name, p.format].filter(Boolean).join(' '),
+          unit: p.unit as string,
+          quantity,
+          unitPrice,
+          amount: Math.round(quantity * unitPrice * 100) / 100,
+          position,
+        };
+      },
+    );
+    const total =
+      Math.round(lines.reduce((s, l) => s + l.amount, 0) * 100) / 100;
+    return {
+      outlet,
+      priceList: catalog.priceList,
+      currency: catalog.currency,
+      lines,
+      total,
+    };
+  }
+
+  /** Numéro suivant de la structure, sans collision entre deux prises simultanées. */
+  async nextNumber(t: EntityManager): Promise<number> {
+    await t.query(`SELECT pg_advisory_xact_lock(hashtext('orders:' || $1))`, [
+      this.db.tenantId,
+    ]);
+    const [{ next }] = await t.query<{ next: number }[]>(
+      `SELECT coalesce(max(number), 0) + 1 AS next FROM orders`,
+    );
+    return next;
+  }
+
+  /** Lignes d'une commande ou d'une vente. */
+  async insertLines(t: EntityManager, orderId: string, lines: PricedLine[]) {
+    for (const l of lines)
+      await t.query(
+        `INSERT INTO order_lines (tenant_id, order_id, product_id, product_name, unit, quantity,
+                                  unit_price, amount, position)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          this.db.tenantId,
+          orderId,
+          l.productId,
+          l.name,
+          l.unit,
+          l.quantity,
+          l.unitPrice,
+          l.amount,
+          l.position,
+        ],
+      );
+  }
+
   /** Commande prise par l'agent chez le point de vente (idempotente sur clientId). */
   async create(user: AuthUser, dto: CreateOrderDto) {
     const m = this.db.manager;
@@ -274,45 +396,11 @@ export class OrdersService {
     );
     if (existing) return this.get(user, existing.id);
 
-    const outlet = await this.outlets.findForVisit(user, dto.outletId);
-    if (outlet.status === 'closed')
-      throw badRequest(
-        'OUTLET_CLOSED',
-        `« ${outlet.name} » est fermé : il ne peut plus commander`,
-      );
-    const catalog = await this.catalog(user, dto.outletId);
-    if (!catalog.priceList)
-      throw badRequest(
-        'NO_PRICE_LIST',
-        'Aucun type de client n’est défini : demandez à votre administrateur de fixer les prix',
-      );
-    const priced = new Map(catalog.products.map((p) => [p.id as string, p]));
-    // Un même produit saisi deux fois : les quantités s'additionnent.
-    const quantities = new Map<string, number>();
-    for (const l of dto.lines)
-      quantities.set(
-        l.productId,
-        (quantities.get(l.productId) ?? 0) + l.quantity,
-      );
-    const lines = [...quantities].map(([productId, quantity], position) => {
-      const p = priced.get(productId);
-      if (!p)
-        throw badRequest(
-          'PRODUCT_NOT_PRICED',
-          'Un produit commandé n’a pas de prix pour ce type de client',
-        );
-      const unitPrice = Number(p.price);
-      return {
-        productId,
-        name: [p.name, p.format].filter(Boolean).join(' '),
-        unit: p.unit as string,
-        quantity,
-        unitPrice,
-        amount: Math.round(quantity * unitPrice * 100) / 100,
-        position,
-      };
-    });
-    const total = lines.reduce((s, l) => s + l.amount, 0);
+    const { outlet, priceList, currency, lines, total } = await this.price(
+      user,
+      dto.outletId,
+      dto.lines,
+    );
     const distance =
       dto.lat != null &&
       dto.lng != null &&
@@ -328,13 +416,7 @@ export class OrdersService {
       );
 
     const id = await this.tx(async (t) => {
-      // Numéro suivant de la structure, sans collision entre deux prises simultanées.
-      await t.query(`SELECT pg_advisory_xact_lock(hashtext('orders:' || $1))`, [
-        this.db.tenantId,
-      ]);
-      const [{ next }] = await t.query<{ next: number }[]>(
-        `SELECT coalesce(max(number), 0) + 1 AS next FROM orders`,
-      );
+      const next = await this.nextNumber(t);
       const [{ id }] = await t.query<{ id: string }[]>(
         `INSERT INTO orders (tenant_id, number, client_id, outlet_id, agent_id, price_list_id,
                              price_list_name, total, currency, note, lat, lng, distance_m, taken_at)
@@ -345,10 +427,10 @@ export class OrdersService {
           dto.clientId,
           outlet.id,
           user.id,
-          catalog.priceList!.id,
-          catalog.priceList!.name,
+          priceList.id,
+          priceList.name,
           total,
-          catalog.currency,
+          currency,
           dto.note || null,
           dto.lat ?? null,
           dto.lng ?? null,
@@ -356,23 +438,7 @@ export class OrdersService {
           takenAt,
         ],
       );
-      for (const l of lines)
-        await t.query(
-          `INSERT INTO order_lines (tenant_id, order_id, product_id, product_name, unit, quantity,
-                                    unit_price, amount, position)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-          [
-            this.db.tenantId,
-            id,
-            l.productId,
-            l.name,
-            l.unit,
-            l.quantity,
-            l.unitPrice,
-            l.amount,
-            l.position,
-          ],
-        );
+      await this.insertLines(t, id, lines);
       await t.query(
         `INSERT INTO order_events (tenant_id, order_id, status, user_id) VALUES ($1, $2, 'taken', $3)`,
         [this.db.tenantId, id, user.id],
@@ -406,6 +472,7 @@ export class OrdersService {
     user: AuthUser,
     q: {
       status?: OrderStatus;
+      kind?: OrderKind;
       outletId?: string;
       agentId?: string;
       from?: string;
@@ -419,6 +486,7 @@ export class OrdersService {
     };
     const where = [await this.where(user, q.outletId ?? null, p)];
     if (q.status) where.push(`o.status = ${p(q.status)}`);
+    if (q.kind) where.push(`o.kind = ${p(q.kind)}`);
     if (q.outletId) where.push(`o.outlet_id = ${p(q.outletId)}`);
     if (q.agentId) where.push(`o.agent_id = ${p(q.agentId)}`);
     if (q.from || q.to) {
@@ -471,9 +539,17 @@ export class OrdersService {
   async summary(user: AuthUser, q: OrdersSummaryQuery) {
     const { where, params } = await this.filters(user, q);
     const rows = await this.db.manager.query<
-      { status: OrderStatus; count: number; amount: number }[]
+      {
+        status: OrderStatus;
+        count: number;
+        amount: number;
+        due: number;
+        paid: number;
+      }[]
     >(
-      `SELECT o.status, count(*)::int AS count, coalesce(sum(o.total), 0)::float8 AS amount
+      `SELECT o.status, count(*)::int AS count, coalesce(sum(o.total), 0)::float8 AS amount,
+              coalesce(sum(o.total - o.paid_amount), 0)::float8 AS due,
+              coalesce(sum(o.paid_amount), 0)::float8 AS paid
        ${ORDER_FROM} WHERE ${where} GROUP BY o.status`,
       params,
     );
@@ -488,8 +564,10 @@ export class OrdersService {
       currency: await this.currency(),
       count: live.reduce((s, r) => s + r.count, 0),
       amount: live.reduce((s, r) => s + r.amount, 0),
-      /** Livrées mais pas encore payées : à encaisser */
-      toCollect: byStatus.delivered.amount,
+      /** Réellement encaissé (acomptes et paiements partiels compris) */
+      collected: live.reduce((s, r) => s + r.paid, 0),
+      /** Livrées mais pas encore (entièrement) payées : à encaisser */
+      toCollect: rows.find((r) => r.status === OrderStatus.Delivered)?.due ?? 0,
       byStatus,
     };
   }
@@ -535,6 +613,11 @@ export class OrdersService {
     const order = await this.get(user, id);
     if (user.role === Role.Agent && order.agentId !== user.id)
       throw forbidden('Seul l’agent qui a pris la commande la fait avancer');
+    if (dto.status === OrderStatus.Cancelled && order.kind === OrderKind.Sale)
+      throw conflict(
+        'SALE_CANCEL_REQUIRED',
+        'Une vente directe s’annule depuis la vente en camionnette : la marchandise revient dans le camion',
+      );
     if (!ORDER_TRANSITIONS[order.status].includes(dto.status))
       throw conflict(
         'INVALID_ORDER_STATUS',
@@ -567,6 +650,25 @@ export class OrdersService {
          VALUES ($1, $2, $3, $4, $5)`,
         [this.db.tenantId, id, dto.status, user.id, dto.comment || null],
       );
+      // Payée : le reste dû est encaissé (par l'agent, il entre dans sa caisse).
+      const due = Math.round((order.total - order.paidAmount) * 100) / 100;
+      if (dto.status === OrderStatus.Paid && due > 0) {
+        const paymentId = await this.payments.insert(t, {
+          clientId: null,
+          outletId: order.outletId,
+          agentId: user.role === Role.Agent ? user.id : null,
+          amount: due,
+          method: dto.method ?? PaymentMethod.Cash,
+          receivedAt: new Date(),
+          createdBy: user.id,
+        });
+        await this.payments.allocate(t, paymentId, id, due, user.id);
+      }
+      // Annulée : l'argent déjà versé règle les autres commandes dues du point de vente.
+      if (dto.status === OrderStatus.Cancelled && order.paidAmount > 0) {
+        await this.payments.release(t, id, false);
+        await this.payments.settle(t, order.outletId, user.id);
+      }
     });
     return this.get(user, id);
   }

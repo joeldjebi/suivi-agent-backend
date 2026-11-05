@@ -8,6 +8,7 @@ import { OutletsModule } from './outlets/outlets.module';
 import { ProductsModule } from './products/products.module';
 import { InsightsModule } from './insights/insights.module';
 import { OrdersModule } from './orders/orders.module';
+import { VanSalesModule } from './van-sales/van-sales.module';
 import { BroadcastsModule } from './broadcasts/broadcasts.module';
 import { PhotosModule } from './photos/photos.module';
 import { DevicesModule } from './devices/devices.module';
@@ -101,6 +102,7 @@ import { RateLimitGuard } from './common/rate-limit';
     ProductsModule,
     InsightsModule,
     OrdersModule,
+    VanSalesModule,
     PhotosModule,
     DocsModule,
     ZoneRequestsModule,

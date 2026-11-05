@@ -83,6 +83,11 @@ export class UpdateSettingsDto {
   @IsIn(Object.values(ExpirationAction))
   expirationActionMixed?: ExpirationAction;
 
+  /** IA photo : analyse automatique des photos de rayon */
+  @IsOptional()
+  @IsBoolean()
+  photoAiAuto?: boolean;
+
   /** RG-08 */
   @IsOptional()
   @IsBoolean()

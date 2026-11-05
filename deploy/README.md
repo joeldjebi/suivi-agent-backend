@@ -92,6 +92,27 @@ autre poste :
 scp root@SERVEUR:/opt/suivi-agent/backups/suivi-agent_*.dump ./sauvegardes/
 ```
 
+### Photos du terrain
+
+Les photos (devantures, formulaires, rayons) ne sont pas dans la base : elles sont dans le
+volume Docker `suivi-agent_photos`, monté dans l'API en `/app/storage`. La base garde
+seulement leur position, leur heure et la clé de leur fichier. Au démarrage, l'API recopie
+dans ce volume les photos encore enregistrées dans la base (anciennes versions), puis les
+efface de la base une fois la copie vérifiée.
+
+- **Sauvegarde** : chaque nuit, après la base, le service `backup` copie les nouvelles photos
+  dans `/opt/suivi-agent/backups/photos` (une photo ne change jamais : seules les nouvelles
+  sont ajoutées). À rapatrier hors du serveur avec les copies de la base :
+  `scp -r root@SERVEUR:/opt/suivi-agent/backups/photos ./sauvegardes/`
+- **Restauration ou changement de serveur** : copier le dossier `photos` sauvegardé dans le
+  volume, puis redémarrer l'API :
+
+```
+cd /opt/suivi-agent/suivi-agent-backend/deploy
+docker compose -f docker-compose.prod.yml run --rm --no-deps -v /opt/suivi-agent/backups/photos:/source:ro api sh -c 'cp -Rn /source/. /app/storage/'
+docker compose -f docker-compose.prod.yml restart api
+```
+
 ## Nom de domaine et HTTPS (serveur cPanel)
 
 Apache (géré par cPanel) tient les ports 80 et 443 pour tous les sites du serveur ; il

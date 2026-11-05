@@ -16,6 +16,9 @@ COPY --from=build --chown=node:node /app/package.json ./
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/shared ./shared
 COPY --from=build --chown=node:node /app/dist ./dist
+# Dossier des photos du terrain (volume « photos ») : créé ici pour appartenir à l'API.
+RUN mkdir -p /app/storage && chown node:node /app/storage
+ENV STORAGE_DIR=/app/storage
 USER node
 EXPOSE 3000
 # Migrations (rôle propriétaire) puis démarrage de l'API (rôle applicatif, sous RLS).

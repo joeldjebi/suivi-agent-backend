@@ -12,6 +12,7 @@ import {
   BillingCycle,
   Feature,
   InvoiceStatus,
+  missingRequirement,
   PlanCode,
   Role,
   SubscriptionStatus,
@@ -60,6 +61,7 @@ import {
 } from './platform.dto';
 import * as QRCode from 'qrcode';
 import { LoginThrottle, PLATFORM_LOGIN } from '../common/login-throttle';
+import { PhotoAiService } from '../photo-ai/photo-ai.service';
 import { PlatformTenantService } from './platform-tenant.service';
 import {
   decryptSecret,
@@ -136,7 +138,29 @@ export class PlatformService {
     private readonly tenantData: PlatformTenantService,
     private readonly appVersions: AppVersionService,
     private readonly realtime: RealtimeService,
+    private readonly photoAi: PhotoAiService,
   ) {}
+
+  /** Supplément de photos analysées pour le mois en cours (remplace le précédent). */
+  async setPhotoAiBonus(
+    admin: PlatformUser,
+    tenantId: string,
+    photos: number,
+    note?: string,
+  ) {
+    const [tenant] = await this.db.manager.query<{ id: string }[]>(
+      `SELECT id FROM tenants WHERE id = $1`,
+      [tenantId],
+    );
+    if (!tenant) throw notFound('Structure');
+    const usage = await this.photoAi.setBonus(tenantId, photos, note);
+    await this.log(admin, 'tenant.photo_ai_bonus', tenantId, {
+      month: usage.month,
+      photos,
+      note: note ?? null,
+    });
+    return usage;
+  }
 
   // ------------------------------------------------------------ journal
 
@@ -1242,6 +1266,7 @@ export class PlatformService {
       `SELECT p.code, p.name, p.description, p.monthly_price AS "monthlyPrice",
               p.included_agents AS "includedAgents", p.included_leads AS "includedLeads",
               p.extra_agent_price AS "extraAgentPrice", p.sort, p.is_active AS "isActive",
+              p.photo_ai_monthly_quota AS "photoAiMonthlyQuota", p.photo_ai_extra_price AS "photoAiExtraPrice",
               p.features, p.updated_at AS "updatedAt",
               (SELECT count(*) FROM subscriptions s WHERE s.plan_code = p.code)::int AS tenants,
               (SELECT count(*) FROM subscriptions s
@@ -1276,6 +1301,8 @@ export class PlatformService {
       includedAgents: dto.includedAgents,
       includedLeads: dto.includedLeads,
       extraAgentPrice: dto.extraAgentPrice,
+      photoAiMonthlyQuota: dto.photoAiMonthlyQuota ?? 0,
+      photoAiExtraPrice: dto.photoAiExtraPrice ?? 0,
       features: dto.features,
       sort: dto.sort ?? next,
       isActive: dto.isActive ?? true,
@@ -1419,6 +1446,11 @@ export class PlatformService {
           `La formule ${plan.name} n’est plus proposée`,
         );
     }
+    if (dto.photoAiProvider && !this.photoAi.isAvailable(dto.photoAiProvider))
+      throw conflict(
+        'PHOTO_AI_NOT_CONFIGURED',
+        'Ajoutez d’abord la clé API de ce fournisseur dans la configuration du serveur',
+      );
     const changes = Object.fromEntries(
       Object.entries(dto).filter(([, v]) => v !== undefined),
     ) as Partial<PlatformSettings>;
@@ -1466,22 +1498,21 @@ export class PlatformService {
   }
 }
 
-/** Les relevés produits se font pendant les visites des points de vente. */
+/** Noms des fonctionnalités dans les messages de dépendance. */
+const FEATURE_NAMES: Partial<Record<Feature, string>> = {
+  [Feature.PointsOfSale]: 'Points de vente',
+  [Feature.ProductAudits]: 'Relevés produits',
+  [Feature.Orders]: 'Prise de commande',
+  [Feature.VanSales]: 'Vente en camionnette',
+  [Feature.PhotoAi]: 'IA photo',
+};
+
+/** Une formule inclut les prérequis de chacune de ses fonctionnalités (FEATURE_REQUIRES). */
 function assertFeatureDependencies(features: Feature[]) {
-  if (
-    features.includes(Feature.Orders) &&
-    !features.includes(Feature.PointsOfSale)
-  )
+  const missing = missingRequirement(features);
+  if (missing)
     throw badRequest(
       'FEATURE_DEPENDENCY',
-      'La prise de commande demande aussi les points de vente',
-    );
-  if (
-    features.includes(Feature.ProductAudits) &&
-    !features.includes(Feature.PointsOfSale)
-  )
-    throw badRequest(
-      'FEATURE_DEPENDENCY',
-      'Les relevés produits demandent aussi les points de vente',
+      `« ${FEATURE_NAMES[missing.feature] ?? missing.feature} » demande aussi « ${FEATURE_NAMES[missing.requires] ?? missing.requires} »`,
     );
 }

@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import {
   IsDateString,
+  IsIn,
   IsLatitude,
   IsLongitude,
   IsNumber,
@@ -34,4 +35,9 @@ export class UploadPhotoDto {
   @IsNumber()
   @Min(0)
   accuracy?: number;
+
+  /** « shelf » : photo de rayon, analysée par l'IA photo si la formule l'inclut */
+  @IsOptional()
+  @IsIn(['shelf'])
+  kind?: 'shelf';
 }

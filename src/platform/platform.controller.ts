@@ -8,6 +8,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
   Req,
   UseGuards,
@@ -29,6 +30,7 @@ import {
   ResolveErrorDto,
   PlatformLoginDto,
   PlatformPasswordDto,
+  PhotoAiBonusDto,
   PlatformSubscriptionDto,
   RecordPaymentDto,
   SuspendDto,
@@ -48,6 +50,7 @@ import {
   type PlatformUser,
 } from './platform-auth';
 import { ErrorLogService } from '../error-log/error-log.service';
+import { PhotoAiService } from '../photo-ai/photo-ai.service';
 import { PlatformService } from './platform.service';
 import { PlatformTenantService } from './platform-tenant.service';
 import { clientIp, PlatformIpGuard } from './platform-security';
@@ -156,6 +159,7 @@ export class PlatformController {
     private readonly platform: PlatformService,
     private readonly tenantData: PlatformTenantService,
     private readonly errors: ErrorLogService,
+    private readonly photoAi: PhotoAiService,
   ) {}
 
   @Get('dashboard')
@@ -233,6 +237,16 @@ export class PlatformController {
   @Get('tenants/:id/config')
   tenantConfig(@Param('id', ParseUUIDPipe) id: string) {
     return this.tenantData.config(id);
+  }
+
+  /** IA photo : photos accordées en plus du quota ce mois-ci. */
+  @Put('tenants/:id/photo-ai-bonus')
+  setPhotoAiBonus(
+    @CurrentAdmin() admin: PlatformUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: PhotoAiBonusDto,
+  ) {
+    return this.platform.setPhotoAiBonus(admin, id, dto.photos, dto.note);
   }
 
   @Get('tenants/:id/activity')
@@ -333,6 +347,12 @@ export class PlatformController {
     @Body() dto: UpdatePlanDto,
   ) {
     return this.platform.updatePlan(admin, code, dto);
+  }
+
+  /** IA photo : fournisseurs branchés, choix actif, analyses et coût du mois. */
+  @Get('photo-ai')
+  photoAiOverview() {
+    return this.photoAi.overview();
   }
 
   @Get('settings')

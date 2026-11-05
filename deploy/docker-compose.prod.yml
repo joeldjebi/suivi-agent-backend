@@ -62,9 +62,11 @@ services:
     # Agent Netdata du serveur (page Supervision), joint sans l'ouvrir à Internet.
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # Clés hors dépôt (compte de service Firebase pour les notifications push).
+    # Clés hors dépôt (compte de service Firebase pour les notifications push), et photos du
+    # terrain (volume « photos », gardé d'une mise à jour à l'autre).
     volumes:
       - ./secrets:/app/secrets:ro
+      - photos:/app/storage
     depends_on:
       db:
         condition: service_healthy
@@ -124,6 +126,8 @@ services:
     volumes:
       - ./backup.sh:/backup.sh:ro
       - ${BACKUP_DIR:-../../backups}:/backups
+      # Photos du terrain, copiées chaque nuit dans les sauvegardes (lecture seule ici).
+      - photos:/photos:ro
     depends_on:
       db:
         condition: service_healthy
@@ -163,3 +167,5 @@ volumes:
   pgdata:
   redisdata:
   pgadmindata:
+  # Photos du terrain (contenu des fichiers ; la base garde leur clé).
+  photos:

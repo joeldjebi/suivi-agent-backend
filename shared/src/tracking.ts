@@ -24,6 +24,8 @@ export interface MissionField {
   options?: string[];
   /** Relevé par produit : produits concernés et mesures relevées */
   products?: import('./products').ProductFieldConfig;
+  /** Photo : photo de rayon, analysée par l'IA photo (formule qui l'inclut) */
+  shelf?: boolean;
 }
 
 /** Position diffusée en temps réel à la carte web. */

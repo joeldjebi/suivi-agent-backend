@@ -129,6 +129,10 @@ export class TenantSettings {
   @Column({ name: 'daily_report_time', type: 'text', nullable: true })
   dailyReportTime: string | null;
 
+  /** IA photo : photos de rayon analysées automatiquement à l'envoi */
+  @Column({ name: 'photo_ai_auto', default: true })
+  photoAiAuto: boolean;
+
   @Column({ name: 'position_retention_days' })
   positionRetentionDays: number;
 

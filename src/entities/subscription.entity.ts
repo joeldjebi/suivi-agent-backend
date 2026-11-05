@@ -1,4 +1,5 @@
 import type {
+  PhotoAiProviderChoice,
   BillingCycle,
   Feature,
   InvoiceStatus,
@@ -43,6 +44,14 @@ export class Plan {
   /** Prix mensuel d'un agent au-delà du quota */
   @Column({ name: 'extra_agent_price', type: 'integer' })
   extraAgentPrice: number;
+
+  /** IA photo : photos analysées incluses chaque mois (0 = aucune) */
+  @Column({ name: 'photo_ai_monthly_quota', type: 'integer', default: 0 })
+  photoAiMonthlyQuota: number;
+
+  /** IA photo : prix d'un lot de 100 photos analysées au-delà du quota */
+  @Column({ name: 'photo_ai_extra_price', type: 'integer', default: 0 })
+  photoAiExtraPrice: number;
 
   @Column({ type: 'integer' })
   sort: number;
@@ -111,6 +120,10 @@ export class PlatformSettings {
 
   @Column({ name: 'ios_store_url', type: 'text', nullable: true })
   iosStoreUrl: string | null;
+
+  /** IA photo : fournisseur actif (Anthropic, Mistral AI) ou « off » */
+  @Column({ name: 'photo_ai_provider', type: 'text', default: 'anthropic' })
+  photoAiProvider: PhotoAiProviderChoice;
 }
 
 @Entity('subscriptions')

@@ -1,4 +1,4 @@
-import { OrderStatus } from '@suivi/shared';
+import { OrderKind, OrderStatus, PaymentMethod } from '@suivi/shared';
 import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -134,12 +134,21 @@ export class ChangeOrderStatusDto {
   @MaxLength(500)
   @Transform(trim)
   comment?: string;
+  /** Moyen de paiement du reste dû (statut « payée ») ; espèces par défaut */
+  @IsOptional()
+  @IsIn(Object.values(PaymentMethod))
+  method?: PaymentMethod;
 }
 
 export class ListOrdersQuery extends PaginationQuery {
   @IsOptional()
   @IsIn(STATUSES)
   status?: OrderStatus;
+
+  /** Commandes ou ventes directes */
+  @IsOptional()
+  @IsIn(Object.values(OrderKind))
+  kind?: OrderKind;
 
   @IsOptional()
   @IsUUID()

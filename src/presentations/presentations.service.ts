@@ -6,6 +6,7 @@ import { conflict, notFound } from '../common/business.exception';
 import { DbService } from '../common/db.service';
 import { RedisService } from '../common/redis.service';
 import { SessionRevocationService } from '../common/session-revocation.service';
+import { FileStorage } from '../common/file-storage';
 import { DEFAULT_LANDING } from '../landing/landing.defaults';
 import { normalizeFooter } from '../landing/landing.sanitize';
 import type { PlatformUser } from '../platform/platform-auth';
@@ -43,6 +44,7 @@ export class PresentationsService {
     private readonly subscriptions: SubscriptionsService,
     private readonly redis: RedisService,
     private readonly revocation: SessionRevocationService,
+    private readonly storage: FileStorage,
   ) {}
 
   /**
@@ -376,6 +378,8 @@ export class PresentationsService {
     );
     this.db.afterCommit(() => {
       void this.redis.client.del(`live:${tenantId}`);
+      // Ses photos (fichiers hors de la base) partent avec elle.
+      void this.storage.removeTree(`photos/${tenantId}`);
     });
     await this.log(admin, 'presentation.demo.delete', null, {
       clientName: (row.content as PresentationContent).clientName,

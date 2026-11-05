@@ -82,6 +82,11 @@ export class MissionFieldDto {
   @ValidateNested()
   @Type(() => ProductFieldConfigDto)
   products?: ProductFieldConfigDto;
+
+  /** Photo : photo de rayon, analysée par l'IA photo */
+  @IsOptional()
+  @IsBoolean()
+  shelf?: boolean;
 }
 
 export class CreateMissionTypeDto {

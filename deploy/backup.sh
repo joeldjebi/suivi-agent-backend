@@ -1,6 +1,8 @@
 #!/bin/sh
 # Sauvegarde automatique de la base : une copie complète chaque nuit (format pg_dump
 # compressé), vérifiée, gardée BACKUP_KEEP_DAYS jours. Tourne dans le service « backup ».
+# Les photos du terrain (volume « photos », monté en /photos) sont copiées dans
+# /backups/photos : une photo ne change jamais, seules les nouvelles sont ajoutées.
 #
 # Variables : PGHOST, PGUSER, PGPASSWORD, PGDATABASE (connexion), BACKUP_HOUR (heure UTC,
 # 2 par défaut), BACKUP_KEEP_DAYS (14 par défaut). Les copies vont dans /backups.
@@ -25,6 +27,17 @@ backup() {
   else
     rm -f "$tmp"
     log "ÉCHEC : la copie de la base n'a pas pu être faite"
+  fi
+  photos
+}
+
+photos() {
+  [ -d /photos ] || return 0
+  mkdir -p "$DIR/photos"
+  if cp -Rn /photos/. "$DIR/photos/"; then
+    log "photos OK ($(find "$DIR/photos" -type f | wc -l) fichiers, $(du -sh "$DIR/photos" | cut -f1))"
+  else
+    log "ÉCHEC : les photos n'ont pas pu être copiées"
   fi
 }
 

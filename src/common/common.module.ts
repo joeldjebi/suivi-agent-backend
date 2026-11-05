@@ -2,6 +2,7 @@ import { Global, Module } from '@nestjs/common';
 import { AccessService } from './access.service';
 import { AlertsService } from './alerts.service';
 import { DbService } from './db.service';
+import { FileStorage } from './file-storage';
 import { NotificationsService } from './notifications.service';
 import { PushService } from './push.service';
 import { RealtimeService } from './realtime.service';
@@ -17,6 +18,7 @@ import { ZoneExitsService } from './zone-exits.service';
     SessionRevocationService,
     AccessService,
     DbService,
+    FileStorage,
     LoginThrottle,
     NotificationsService,
     PushService,
@@ -29,6 +31,7 @@ import { ZoneExitsService } from './zone-exits.service';
     SessionRevocationService,
     AccessService,
     DbService,
+    FileStorage,
     LoginThrottle,
     NotificationsService,
     PushService,

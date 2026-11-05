@@ -25,6 +25,7 @@ import {
   InvoiceStatus,
   PLAN_CODE_PATTERN,
   SubscriptionStatus,
+  type PhotoAiProviderChoice,
   type PlanCode,
 } from '@suivi/shared';
 import { PaginationQuery } from '../common/pagination.dto';
@@ -245,6 +246,19 @@ export class PlatformSubscriptionDto {
   trialEndsAt?: string;
 }
 
+/** Photos analysées accordées en plus du quota, pour le mois en cours. */
+export class PhotoAiBonusDto {
+  @IsInt()
+  @Min(0)
+  @Max(1_000_000)
+  photos: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  note?: string;
+}
+
 export class SuspendDto {
   @IsString()
   @IsNotEmpty()
@@ -340,6 +354,19 @@ export class CreatePlanDto {
   @Min(0)
   extraAgentPrice: number;
 
+  /** IA photo : photos analysées incluses chaque mois */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(1_000_000)
+  photoAiMonthlyQuota?: number;
+
+  /** IA photo : prix d'un lot de 100 photos au-delà du quota */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  photoAiExtraPrice?: number;
+
   /** Avantages inclus (fonctionnalités de l'application) */
   @IsArray()
   @ArrayUnique()
@@ -389,6 +416,19 @@ export class UpdatePlanDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  /** IA photo : photos analysées incluses chaque mois */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(1_000_000)
+  photoAiMonthlyQuota?: number;
+
+  /** IA photo : prix d'un lot de 100 photos au-delà du quota */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  photoAiExtraPrice?: number;
 
   @IsOptional()
   @IsArray()
@@ -470,6 +510,11 @@ export class UpdatePlatformSettingsDto {
   @ValidateIf((_, v) => v !== null)
   @IsUrl({ require_protocol: true })
   iosStoreUrl?: string | null;
+
+  /** IA photo : fournisseur actif, ou « off » */
+  @IsOptional()
+  @IsIn(['anthropic', 'mistral', 'off'])
+  photoAiProvider?: PhotoAiProviderChoice;
 }
 
 export class TenantUsersQuery extends PaginationQuery {

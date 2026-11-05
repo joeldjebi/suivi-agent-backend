@@ -17,13 +17,17 @@ import type { Response } from 'express';
 import type { AuthUser } from '../common/auth-user';
 import { CurrentUser, Roles } from '../common/decorators';
 import { UploadPhotoDto } from './photos.dto';
+import { PhotoAiService } from '../photo-ai/photo-ai.service';
 import { MAX_PHOTO_BYTES, PhotosService } from './photos.service';
 
 @ApiTags('Photos des formulaires')
 @ApiBearerAuth()
 @Controller('photos')
 export class PhotosController {
-  constructor(private readonly photos: PhotosService) {}
+  constructor(
+    private readonly photos: PhotosService,
+    private readonly ai: PhotoAiService,
+  ) {}
 
   /**
    * Photo prise sur le terrain (formulaire, fiche de point de vente) : JPEG, PNG ou WebP,
@@ -42,18 +46,22 @@ export class PhotosController {
         lat: { type: 'number' },
         lng: { type: 'number' },
         accuracy: { type: 'number' },
+        kind: { type: 'string', enum: ['shelf'] },
       },
     },
   })
   @UseInterceptors(
     FileInterceptor('file', { limits: { fileSize: MAX_PHOTO_BYTES * 2 } }),
   )
-  upload(
+  async upload(
     @CurrentUser() user: AuthUser,
     @UploadedFile() file: Express.Multer.File | undefined,
     @Body() dto: UploadPhotoDto,
   ) {
-    return this.photos.upload(user, file, dto);
+    const photo = await this.photos.upload(user, file, dto);
+    // Photo de rayon : analysée par l'IA photo (si la formule l'inclut), sans attendre.
+    if (photo.kind === 'shelf') await this.ai.enqueueShelfPhoto(user, photo.id);
+    return { id: photo.id };
   }
 
   @Get(':id')

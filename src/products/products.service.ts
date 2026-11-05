@@ -28,9 +28,12 @@ export interface Product {
   unit: string;
   packagings: Packaging[];
   isActive: boolean;
+  /** Photo de référence (IA photo) */
+  referencePhotoId: string | null;
 }
 
-const SELECT = `id, name, brand, category, format, own, unit, packagings, is_active AS "isActive"`;
+const SELECT = `id, name, brand, category, format, own, unit, packagings, is_active AS "isActive",
+  reference_photo_id AS "referencePhotoId"`;
 
 /**
  * Catalogue de produits de la structure (les siens et ceux de la concurrence) : unité de base

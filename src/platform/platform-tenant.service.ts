@@ -5,6 +5,7 @@ import { notFound } from '../common/business.exception';
 import { DbService } from '../common/db.service';
 import type { Invoice, Subscription, TenantSettings } from '../entities';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
+import { PhotoAiService } from '../photo-ai/photo-ai.service';
 import type { TenantActivityQuery, TenantUsersQuery } from './platform.dto';
 
 const DAY = 86400_000;
@@ -32,6 +33,7 @@ export class PlatformTenantService {
   constructor(
     private readonly db: DbService,
     private readonly subscriptions: SubscriptionsService,
+    private readonly photoAi: PhotoAiService,
   ) {}
 
   private async assertExists(tenantId: string) {
@@ -340,7 +342,9 @@ export class PlatformTenantService {
               (SELECT count(*) FROM push_devices WHERE tenant_id = $1)::int AS devices,
               (SELECT count(*) FROM outlets WHERE tenant_id = $1)::int AS outlets,
               (SELECT count(*) FROM products WHERE tenant_id = $1 AND is_active)::int AS products,
-              (SELECT count(*) FROM orders WHERE tenant_id = $1)::int AS orders`,
+              (SELECT count(*) FROM orders WHERE tenant_id = $1)::int AS orders,
+              (SELECT count(*) FROM stock_locations WHERE tenant_id = $1 AND kind = 'van' AND is_active)::int AS vans,
+              (SELECT count(*) FROM stock_locations WHERE tenant_id = $1 AND kind = 'depot' AND is_active)::int AS depots`,
       [tenantId],
     );
     const customBranding =
@@ -349,6 +353,7 @@ export class PlatformTenantService {
         !!branding.hasLogo ||
         !!branding.welcomeMessage ||
         !!branding.displayName);
+    const ai = await this.photoAi.usage(tenantId);
     // Pour chaque avantage : inclus dans la formule, et réellement utilisé.
     const usage: Record<Feature, string | null> = {
       groups: use.groups
@@ -383,6 +388,13 @@ export class PlatformTenantService {
       orders: use.orders
         ? `${use.orders} commande${use.orders > 1 ? 's' : ''}`
         : null,
+      van_sales: use.vans
+        ? `${use.vans} camion${use.vans > 1 ? 's' : ''}, ${use.depots} dépôt${use.depots > 1 ? 's' : ''}`
+        : null,
+      photo_ai:
+        ai.used || ai.bonus
+          ? `${ai.used} / ${ai.quota + ai.bonus} photos analysées ce mois-ci`
+          : null,
     };
     return {
       settings,
@@ -398,6 +410,8 @@ export class PlatformTenantService {
         usage: usage[feature],
       })),
       branding,
+      /** IA photo : quota du mois, supplément accordé, consommé */
+      photoAi: ai,
       payroll: {
         period: use.payPeriod,
         grids: use.payGrids,
