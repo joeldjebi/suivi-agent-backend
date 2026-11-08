@@ -10888,6 +10888,13 @@ describe('Vente en camionnette', () => {
       ).id,
     ).toBe(s1.id);
     expect(await vanQty(coca.id)).toBe(16);
+    // Sorti aujourd'hui : ce qu'il y avait dans la journée = reste + sorti (28).
+    expect(
+      ((await van()).stock as Body[]).find((s) => s.productId === coca.id),
+    ).toMatchObject({ quantity: 16, outToday: 12 });
+    expect(
+      ((await van()).stock as Body[]).find((s) => s.productId === fanta.id),
+    ).toMatchObject({ quantity: 10, outToday: 0 });
     await agent.api
       .post('/van-sales/sales', {
         clientId: uid(),

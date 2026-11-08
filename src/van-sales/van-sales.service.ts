@@ -491,6 +491,22 @@ export class VanSalesService {
     };
   }
 
+  /** Quantités sorties du camion aujourd'hui (heure de la structure), par produit. */
+  private async outToday(vanId: string): Promise<Map<string, number>> {
+    const { day, tz } = await this.today();
+    const rows = await this.db.manager.query<
+      { productId: string; quantity: string }[]
+    >(
+      `SELECT l.product_id AS "productId", sum(l.quantity) AS quantity
+       FROM stock_movements m JOIN stock_movement_lines l ON l.movement_id = m.id
+       WHERE m.from_location_id = $1 AND m.status = 'done' AND l.quantity > 0
+         AND (coalesce(m.confirmed_at, m.occurred_at) AT TIME ZONE $2)::date = $3::date
+       GROUP BY l.product_id`,
+      [vanId, tz, day],
+    );
+    return new Map(rows.map((r) => [r.productId, Number(r.quantity)]));
+  }
+
   // ------------------------------------------------------------ caisse
 
   private async today(): Promise<{ day: string; tz: string }> {
@@ -716,17 +732,21 @@ export class VanSalesService {
   async mine(user: AuthUser) {
     const van = await this.stock.vanOf(user.id);
     if (!van) return { van: null };
-    const [levels, pending, cash, depots] = await Promise.all([
+    const [levels, pending, cash, depots, out] = await Promise.all([
       this.stock.levels(user, van.id),
       this.stock.movements(user, { status: 'pending', page: 1, limit: 50 }),
       this.cash(user, {}),
       this.db.manager.query<{ id: string; name: string }[]>(
         `SELECT id, name FROM stock_locations WHERE kind = 'depot' AND is_active ORDER BY lower(name)`,
       ),
+      this.outToday(van.id),
     ]);
     return {
       van,
       depots,
+      // outToday : sorti du camion aujourd'hui (ventes, dépannages donnés, casse, retours).
+      // Ce qu'il y avait aujourd'hui = quantity + outToday : un produit épuisé dans la
+      // journée reste dans la liste (quantité 0).
       stock: levels.products
         .map((p) => ({
           productId: p.id,
@@ -736,8 +756,9 @@ export class VanSalesService {
           unit: p.unit,
           packagings: p.packagings,
           quantity: p.quantities[van.id] ?? 0,
+          outToday: out.get(p.id) ?? 0,
         }))
-        .filter((p) => p.quantity !== 0),
+        .filter((p) => p.quantity !== 0 || p.outToday > 0),
       pending: pending.items,
       today: cash.agents[0] ?? null,
       day: cash.day,
