@@ -60,6 +60,8 @@ export interface OutletView {
   data: Record<string, unknown>;
   zone: { id: string; name: string } | null;
   createdBy: { id: string; name: string } | null;
+  /** Agent responsable (commercial attitré) ; null : les agents de la zone */
+  agent: { id: string; name: string } | null;
   createdAt: Date;
   updatedAt: Date;
   /** Fréquence propre au point de vente (jours) ; null : celle de la structure */
@@ -96,6 +98,8 @@ interface Row {
   zoneName: string | null;
   createdById: string | null;
   createdByName: string | null;
+  agentId: string | null;
+  agentName: string | null;
   createdAt: Date;
   updatedAt: Date;
   visitFrequencyDays: number | null;
@@ -123,6 +127,8 @@ const SELECT = `
   zz.id AS "zoneId", zz.name AS "zoneName",
   o.created_by AS "createdById",
   nullif(trim(coalesce(u.first_name, '') || ' ' || coalesce(u.last_name, '')), '') AS "createdByName",
+  o.agent_id AS "agentId",
+  nullif(trim(coalesce(ag.first_name, '') || ' ' || coalesce(ag.last_name, '')), '') AS "agentName",
   o.created_at AS "createdAt", o.updated_at AS "updatedAt",
   o.visit_frequency_days AS "visitFrequencyDays", freq.days AS "frequencyDays",
   lv.at AS "lastVisitAt", ${OVERDUE} AS overdue,
@@ -135,6 +141,7 @@ const FROM = `
     ORDER BY z.name LIMIT 1
   ) zz ON true
   LEFT JOIN users u ON u.id = o.created_by
+  LEFT JOIN users ag ON ag.id = o.agent_id
   LEFT JOIN price_lists pl ON pl.id = o.price_list_id
   LEFT JOIN LATERAL (
     SELECT max(ms.submitted_at) AS at FROM mission_submissions ms
@@ -145,12 +152,17 @@ const FROM = `
                     (SELECT ts.outlet_visit_frequency_days FROM tenant_settings ts WHERE ts.tenant_id = o.tenant_id)) AS days
   ) freq`;
 
-/** Périmètre visible : `zones` null = tout ; sinon ces zones, ses fiches et celles de ses agents. */
+/**
+ * Périmètre visible : `zones` null = tout. Agent : ses points de vente, ceux sans responsable
+ * de ses zones, et ceux des missions de visites qu'on lui a confiées. Chef : ceux de son équipe.
+ */
 interface Scope {
   zones: string[] | null;
   creators: string[];
   /** Chef : seulement les points de vente de son équipe (pas les fiches à localiser des autres). */
   team?: boolean;
+  /** Agent : son identifiant et son groupe (missions de visites confiées au groupe). */
+  agent?: { id: string; groupId: string | null };
 }
 
 /** Sans accents ni casse ni ponctuation : « Boutique Awa » = « boutique awa ». */
@@ -248,6 +260,8 @@ export class OutletsService {
     if (q.category) where.push(`o.category = ${p(q.category)}`);
     if (q.unlocated) where.push(`o.location IS NULL`);
     if (q.overdue) where.push(OVERDUE);
+    if (q.agentId === 'none') where.push(`o.agent_id IS NULL`);
+    else if (q.agentId) where.push(`o.agent_id = ${p(q.agentId)}::uuid`);
     let distance = '';
     if (near) {
       const point = `ST_SetSRID(ST_MakePoint(${p(q.lng)}, ${p(q.lat)}), 4326)`;
@@ -304,6 +318,8 @@ export class OutletsService {
     const where = [this.scopeSql(scope, p), 'o.location IS NOT NULL'];
     if (q.status) where.push(`o.status = ${p(q.status)}`);
     if (q.zoneId) where.push(`zz.id = ${p(q.zoneId)}`);
+    if (q.agentId === 'none') where.push(`o.agent_id IS NULL`);
+    else if (q.agentId) where.push(`o.agent_id = ${p(q.agentId)}::uuid`);
     return this.db.manager.query<
       {
         id: string;
@@ -370,7 +386,32 @@ export class OutletsService {
        ORDER BY s.submitted_at DESC LIMIT 30`,
       [id],
     );
-    return { ...outlet, history, visits };
+    // Responsables successifs : qui l'a confié à qui, quand et pourquoi.
+    const agentChanges = await this.db.manager.query<
+      {
+        id: string;
+        from: { id: string; name: string } | null;
+        to: { id: string; name: string } | null;
+        by: { id: string; name: string } | null;
+        reason: string | null;
+        createdAt: Date;
+      }[]
+    >(
+      `SELECT c.id, c.reason, c.created_at AS "createdAt",
+              CASE WHEN f.id IS NULL THEN NULL
+                   ELSE json_build_object('id', f.id, 'name', trim(f.first_name || ' ' || f.last_name)) END AS "from",
+              CASE WHEN t.id IS NULL THEN NULL
+                   ELSE json_build_object('id', t.id, 'name', trim(t.first_name || ' ' || t.last_name)) END AS "to",
+              CASE WHEN b.id IS NULL THEN NULL
+                   ELSE json_build_object('id', b.id, 'name', trim(b.first_name || ' ' || b.last_name)) END AS "by"
+       FROM outlet_agent_changes c
+       LEFT JOIN users f ON f.id = c.from_agent_id
+       LEFT JOIN users t ON t.id = c.to_agent_id
+       LEFT JOIN users b ON b.id = c.by_user_id
+       WHERE c.outlet_id = $1 ORDER BY c.created_at DESC, c.id LIMIT 100`,
+      [id],
+    );
+    return { ...outlet, history, visits, agentChanges };
   }
 
   /** Point de vente visible par l'utilisateur (visite d'une mission). */
@@ -430,7 +471,7 @@ export class OutletsService {
               (SELECT z.name FROM zones z WHERE z.is_active AND o.location IS NOT NULL
                  AND ST_Covers(z.area, o.location) ORDER BY z.name LIMIT 1) AS "zoneName",
               ${point ? `round(ST_Distance(o.location::geography, ${point}))::int` : 'NULL::int'} AS distance,
-              ${this.scopeSql(scope, p)} AS "inScope"
+              coalesce(${this.scopeSql(scope, p)}, false) AS "inScope"
        FROM outlets o
        WHERE ${where.join(' AND ')}
        ORDER BY ${point ? 'distance' : 'o.name'} LIMIT 20`,
@@ -522,11 +563,20 @@ export class OutletsService {
     await this.assertPlace(user, dto.lat, dto.lng);
     if (!dto.force) await this.assertNoDuplicate(dto.name, dto.lat, dto.lng);
     const status = dto.status ?? OutletStatus.New;
+    // L'agent qui ajoute un point de vente en devient le responsable ; un responsable peut le
+    // confier à un agent de son périmètre.
+    const agentId =
+      user.role === Role.Agent
+        ? user.id
+        : dto.agentId
+          ? (await this.access.assertCanManageAgent(user, dto.agentId)).id
+          : null;
     const [{ id }] = await m.query<{ id: string }[]>(
       `INSERT INTO outlets (tenant_id, name, category, manager_name, phone, landmark, location,
-                            accuracy, status, photo_id, data, created_by, client_id, visit_frequency_days)
+                            accuracy, status, photo_id, data, created_by, client_id, visit_frequency_days,
+                            agent_id)
        VALUES ($1, $2, $3, $4, $5, $6, ST_SetSRID(ST_MakePoint($7, $8), 4326), $9, $10, $11,
-               $12::jsonb, $13, $14, $15)
+               $12::jsonb, $13, $14, $15, $16)
        RETURNING id`,
       [
         this.db.tenantId,
@@ -544,9 +594,11 @@ export class OutletsService {
         user.id,
         dto.clientId ?? null,
         user.role === Role.Agent ? null : (dto.visitFrequencyDays ?? null),
+        agentId,
       ],
     );
     await this.history(id, null, status, dto.comment || null, user.id);
+    if (agentId) await this.agentChange(id, null, agentId, user.id, null);
     await this.attachPhotos(id, photos);
     return this.get(user, id);
   }
@@ -657,6 +709,111 @@ export class OutletsService {
   }
 
   /**
+   * Transfert de points de vente à un autre agent (ou retour « sans responsable ») :
+   * l'administrateur partout, le chef dans son équipe (l'ancien et le nouveau responsable en
+   * font partie). Chaque changement est historisé ; les deux agents sont prévenus.
+   */
+  async assign(
+    user: AuthUser,
+    dto: {
+      outletIds: string[];
+      /** Tous les points de vente de cet agent, à la place de la liste */
+      fromAgentId?: string;
+      agentId: string | null;
+      reason?: string;
+    },
+  ) {
+    if (dto.fromAgentId)
+      await this.access.assertCanManageAgent(user, dto.fromAgentId);
+    const ids = dto.fromAgentId
+      ? (
+          await this.db.manager.query<{ id: string }[]>(
+            `SELECT id FROM outlets WHERE agent_id = $1`,
+            [dto.fromAgentId],
+          )
+        ).map((r) => r.id)
+      : [...new Set(dto.outletIds)];
+    if (!ids.length) return { updated: 0 };
+    const to = dto.agentId
+      ? await this.access.assertCanManageAgent(user, dto.agentId)
+      : null;
+    if (to && !to.isActive)
+      throw badRequest('AGENT_INACTIVE', 'Ce compte agent est désactivé');
+    const scope = await this.scope(user);
+    const params: unknown[] = [ids];
+    const p = (v: unknown) => {
+      params.push(v);
+      return `$${params.length}`;
+    };
+    const rows = await this.db.manager.query<
+      { id: string; name: string; agentId: string | null }[]
+    >(
+      `SELECT o.id, o.name, o.agent_id AS "agentId" FROM outlets o
+       WHERE o.id = ANY($1::uuid[]) AND ${this.scopeSql(scope, p)}
+       ORDER BY o.name
+       FOR UPDATE OF o`,
+      params,
+    );
+    if (rows.length !== ids.length) throw notFound('Point de vente');
+    // Chef : il ne retire pas un point de vente à un agent d'une autre équipe.
+    if (user.role === Role.TeamLead) {
+      const team = (await this.access.agentScope(user)) ?? [];
+      const foreign = rows.find((r) => r.agentId && !team.includes(r.agentId));
+      if (foreign)
+        throw forbidden(
+          `« ${foreign.name} » est suivi par un agent d’une autre équipe : seul un administrateur peut le transférer`,
+        );
+    }
+    const changed = rows.filter((r) => r.agentId !== (to?.id ?? null));
+    const reason = dto.reason?.trim() || null;
+    for (const r of changed) {
+      await this.db.manager.query(
+        `UPDATE outlets SET agent_id = $2, updated_at = now() WHERE id = $1`,
+        [r.id, to?.id ?? null],
+      );
+      await this.agentChange(r.id, r.agentId, to?.id ?? null, user.id, reason);
+    }
+    // Prévenus : le nouveau responsable, et chaque agent qui perd des points de vente.
+    const names = (list: typeof changed) =>
+      list.length === 1
+        ? `« ${list[0].name} »`
+        : `${list.length} points de vente`;
+    if (to && changed.length)
+      await this.notifications.notify([to.id], {
+        type: 'outlets.assigned',
+        title: 'Points de vente confiés',
+        body: `${names(changed)} ${changed.length > 1 ? 'vous sont confiés' : 'vous est confié'}${reason ? ` : ${reason}` : ''}.`,
+        data: { outletIds: changed.map((r) => r.id) },
+      });
+    const losers = new Map<string, typeof changed>();
+    for (const r of changed)
+      if (r.agentId)
+        losers.set(r.agentId, [...(losers.get(r.agentId) ?? []), r]);
+    for (const [agentId, list] of losers)
+      await this.notifications.notify([agentId], {
+        type: 'outlets.unassigned',
+        title: 'Points de vente transférés',
+        body: `${names(list)} ${list.length > 1 ? 'ne sont plus suivis' : 'n’est plus suivi'} par vous${to ? ` : confié${list.length > 1 ? 's' : ''} à ${to.firstName} ${to.lastName}` : ''}.`,
+        data: { outletIds: list.map((r) => r.id) },
+      });
+    return { updated: changed.length };
+  }
+
+  private async agentChange(
+    outletId: string,
+    from: string | null,
+    to: string | null,
+    by: string,
+    reason: string | null,
+  ) {
+    await this.db.manager.query(
+      `INSERT INTO outlet_agent_changes (tenant_id, outlet_id, from_agent_id, to_agent_id, by_user_id, reason)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [this.db.tenantId, outletId, from, to, by, reason],
+    );
+  }
+
+  /**
    * Fusion de deux fiches du même commerce : l'historique et les photos passent sur la fiche
    * conservée, qui reprend les informations qui lui manquaient ; l'autre est supprimée.
    */
@@ -688,6 +845,24 @@ export class OutletsService {
       `UPDATE submission_photos SET outlet_id = $1 WHERE outlet_id = $2`,
       [intoId, id],
     );
+    await m.query(
+      `UPDATE outlet_agent_changes SET outlet_id = $1 WHERE outlet_id = $2`,
+      [intoId, id],
+    );
+    // La fiche conservée garde son responsable, sinon reprend celui du doublon.
+    if (!target.agent && source.agent) {
+      await m.query(`UPDATE outlets SET agent_id = $2 WHERE id = $1`, [
+        intoId,
+        source.agent.id,
+      ]);
+      await this.agentChange(
+        intoId,
+        null,
+        source.agent.id,
+        user.id,
+        `Repris de la fiche « ${source.name} » (fusion)`,
+      );
+    }
     // Visites et listes de missions : elles suivent la fiche conservée.
     await m.query(
       `UPDATE mission_submissions SET outlet_id = $1 WHERE outlet_id = $2`,
@@ -984,6 +1159,8 @@ export class OutletsService {
     const where = [this.scopeSql(scope, p)];
     if (q.status) where.push(`o.status = ${p(q.status)}`);
     if (q.zoneId) where.push(`zz.id = ${p(q.zoneId)}`);
+    if (q.agentId === 'none') where.push(`o.agent_id IS NULL`);
+    else if (q.agentId) where.push(`o.agent_id = ${p(q.agentId)}::uuid`);
     const tz = p(settings.timezone);
     const rows = await this.db.manager.query<
       (Row & { created: string; changed: string; visited: string | null })[]
@@ -1059,7 +1236,10 @@ export class OutletsService {
   /** L'agent identifie des points de vente dans ses zones seulement. */
   private async assertPlace(user: AuthUser, lat: number, lng: number) {
     if (user.role !== Role.Agent) return;
-    const zones = await this.agentZones(user);
+    const zones = await this.access.accessibleZoneIds(
+      await this.access.getAgent(user.id),
+      await this.access.settings(),
+    );
     const [inside] = await this.db.manager.query<{ id: string }[]>(
       `SELECT id FROM zones
        WHERE id = ANY($1::uuid[]) AND ST_Covers(area, ST_SetSRID(ST_MakePoint($2, $3), 4326))
@@ -1149,15 +1329,19 @@ export class OutletsService {
     );
   }
 
-  private async agentZones(user: AuthUser): Promise<string[]> {
-    const agent = await this.access.getAgent(user.id);
-    return this.access.accessibleZoneIds(agent, await this.access.settings());
-  }
-
   private async scope(user: AuthUser): Promise<Scope> {
     if (user.role === Role.Admin) return { zones: null, creators: [] };
-    if (user.role === Role.Agent)
-      return { zones: await this.agentZones(user), creators: [user.id] };
+    if (user.role === Role.Agent) {
+      const agent = await this.access.getAgent(user.id);
+      return {
+        zones: await this.access.accessibleZoneIds(
+          agent,
+          await this.access.settings(),
+        ),
+        creators: [user.id],
+        agent: { id: user.id, groupId: agent.groupId },
+      };
+    }
     if (await this.access.supervisesAll(user))
       return { zones: null, creators: [] };
     // Chef : les points de vente de son équipe — créés, visités ou commandés par lui ou ses
@@ -1176,22 +1360,46 @@ export class OutletsService {
   }
 
   /**
-   * Condition SQL du périmètre. Agent : un point de vente sans position est visible de tous (à
-   * localiser). Chef : les points de vente de son équipe seulement.
+   * Condition SQL du périmètre. Agent : ses points de vente ; ceux sans responsable de ses zones
+   * (ou sans position, à localiser) ; ceux des missions de visites en cours qu'on lui a
+   * confiées (leur liste, ou leurs zones). Chef : les points de vente de son équipe seulement.
    */
   private scopeSql(scope: Scope, p: (v: unknown) => string) {
     if (!scope.zones) return 'true';
-    const people = p(scope.creators);
-    const inZone = `EXISTS (SELECT 1 FROM zones sz WHERE sz.id = ANY(${p(scope.zones)}::uuid[])
+    const zones = p(scope.zones);
+    const inZone = `EXISTS (SELECT 1 FROM zones sz WHERE sz.id = ANY(${zones}::uuid[])
                  AND sz.is_active AND ST_Covers(sz.area, o.location))`;
-    if (scope.team)
-      return `(o.created_by = ANY(${people}::uuid[])
+    if (scope.agent) {
+      const me = p(scope.agent.id);
+      const group = p(scope.agent.groupId);
+      // Mission confiée à l'agent, à son groupe, ou ouverte aux agents de ses zones.
+      return `(o.agent_id = ${me}
+        OR (o.agent_id IS NULL AND (o.location IS NULL OR ${inZone}))
+        OR EXISTS (SELECT 1 FROM missions sm
+                   WHERE sm.is_active AND sm.progress_method = 'outlets'
+                     AND sm.status IN ('todo', 'in_progress')
+                     AND (sm.assignee_agent_id = ${me}
+                          OR (${group}::uuid IS NOT NULL AND sm.assignee_group_id = ${group}::uuid)
+                          OR (sm.assignee_agent_id IS NULL AND sm.assignee_group_id IS NULL
+                              AND EXISTS (SELECT 1 FROM mission_zones omz
+                                          WHERE omz.mission_id = sm.id
+                                            AND omz.zone_id = ANY(${zones}::uuid[]))))
+                     AND CASE WHEN sm.visit_mode = 'list'
+                       THEN EXISTS (SELECT 1 FROM mission_outlets smo
+                                    WHERE smo.mission_id = sm.id AND smo.outlet_id = o.id)
+                       ELSE o.location IS NOT NULL AND EXISTS (
+                              SELECT 1 FROM mission_zones smz
+                              JOIN zones msz ON msz.id = smz.zone_id AND msz.is_active
+                              WHERE smz.mission_id = sm.id AND ST_Covers(msz.area, o.location))
+                     END))`;
+    }
+    const people = p(scope.creators);
+    return `(o.created_by = ANY(${people}::uuid[]) OR o.agent_id = ANY(${people}::uuid[])
         OR EXISTS (SELECT 1 FROM mission_submissions ts
                    WHERE ts.outlet_id = o.id AND ts.agent_id = ANY(${people}::uuid[]))
         OR EXISTS (SELECT 1 FROM orders tor
                    WHERE tor.outlet_id = o.id AND tor.agent_id = ANY(${people}::uuid[]))
         OR ${inZone})`;
-    return `(o.location IS NULL OR o.created_by = ANY(${people}::uuid[]) OR ${inZone})`;
   }
 
   private async file(
@@ -1235,6 +1443,7 @@ function view(r: Row): OutletView {
     createdBy: r.createdById
       ? { id: r.createdById, name: r.createdByName ?? '' }
       : null,
+    agent: r.agentId ? { id: r.agentId, name: r.agentName ?? '' } : null,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
     visitFrequencyDays: r.visitFrequencyDays,

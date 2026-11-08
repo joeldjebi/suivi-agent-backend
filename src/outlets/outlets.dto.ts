@@ -2,6 +2,7 @@ import { OutletStatus } from '@suivi/shared';
 import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
+  ArrayMinSize,
   IsArray,
   IsBoolean,
   IsDateString,
@@ -13,6 +14,8 @@ import {
   IsNumber,
   IsObject,
   IsOptional,
+  ValidateIf,
+  Matches,
   IsString,
   IsUUID,
   Max,
@@ -72,6 +75,11 @@ class OutletInfoDto {
 }
 
 export class CreateOutletDto extends OutletInfoDto {
+  /** Agent responsable (administrateur ou chef) ; l'agent qui l'ajoute en devient responsable */
+  @IsOptional()
+  @IsUUID()
+  agentId?: string;
+
   @IsString()
   @IsNotEmpty()
   @MaxLength(120)
@@ -158,6 +166,31 @@ export class ChangeOutletStatusDto {
   comment?: string;
 }
 
+/** Transfert de points de vente à un agent (null : sans responsable). */
+export class AssignOutletsDto {
+  /** Points de vente choisis ; ou bien tous ceux d'un agent (fromAgentId) */
+  @ValidateIf((o: AssignOutletsDto) => !o.fromAgentId)
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(1000)
+  @IsUUID('all', { each: true })
+  outletIds?: string[];
+
+  /** Tous les points de vente de cet agent (départ, congé, réorganisation) */
+  @IsOptional()
+  @IsUUID()
+  fromAgentId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  agentId: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  reason?: string;
+}
+
 export class MergeOutletDto {
   /** Point de vente conservé : celui-ci y est fusionné puis supprimé */
   @IsUUID()
@@ -202,6 +235,13 @@ export class ListOutletsQuery extends PaginationQuery {
   @Transform(({ value }) => value === true || value === 'true')
   @IsBoolean()
   unlocated?: boolean;
+
+  /** Agent responsable ; « none » : sans responsable */
+  @IsOptional()
+  @Matches(
+    /^(none|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i,
+  )
+  agentId?: string;
 
   /** Autour d'un point : triés du plus proche au plus loin */
   @IsOptional()
@@ -255,6 +295,13 @@ export class OutletsMapQuery {
   @IsOptional()
   @IsUUID()
   zoneId?: string;
+
+  /** Agent responsable ; « none » : sans responsable */
+  @IsOptional()
+  @Matches(
+    /^(none|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i,
+  )
+  agentId?: string;
 }
 
 export class ExportOutletsQuery extends OutletsMapQuery {

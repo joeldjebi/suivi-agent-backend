@@ -132,6 +132,7 @@ export class StockService {
         dto.agentId ?? null,
       ],
     );
+    if (dto.agentId) await this.notifyVan(dto.agentId, dto.name, true);
     return this.location(id);
   }
 
@@ -180,7 +181,25 @@ export class StockService {
         dto.isActive ?? null,
       ],
     );
+    // L'agent qui reçoit le camion, et celui qui le perd, sont prévenus.
+    if (dto.agentId !== undefined && dto.agentId !== location.agentId) {
+      const name = dto.name ?? location.name;
+      if (dto.agentId) await this.notifyVan(dto.agentId, name, true);
+      if (location.agentId) await this.notifyVan(location.agentId, name, false);
+    }
     return this.location(id);
+  }
+
+  /** Camion confié à un agent (ou retiré) : il le voit aussitôt dans son app. */
+  private async notifyVan(agentId: string, name: string, given: boolean) {
+    await this.notifications.notify([agentId], {
+      type: given ? 'stock.van_assigned' : 'stock.van_unassigned',
+      title: given ? 'Camion affecté' : 'Camion retiré',
+      body: given
+        ? `Le camion « ${name} » vous est affecté : retrouvez-le dans l’onglet Camion.`
+        : `Le camion « ${name} » ne vous est plus affecté.`,
+      data: {},
+    });
   }
 
   private async assertNameFree(name: string, except?: string) {

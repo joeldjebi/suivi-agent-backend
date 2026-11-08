@@ -20,6 +20,7 @@ import {
   notFound,
 } from '../common/business.exception';
 import { DbService } from '../common/db.service';
+import { RealtimeService } from '../common/realtime.service';
 import { photoIdsOf, validateData } from '../common/form-fields';
 import {
   assertDeletable,
@@ -99,6 +100,7 @@ export class MissionsService {
     private readonly outlets: OutletsService,
     private readonly products: ProductsService,
     private readonly photoAi: PhotoAiService,
+    private readonly realtime: RealtimeService,
   ) {}
 
   async list(user: AuthUser, query: ListMissionsQuery) {
@@ -778,6 +780,10 @@ export class MissionsService {
        WHERE due_date < $1 AND is_active AND status IN ('todo', 'in_progress') RETURNING 1`,
       [now],
     );
+    if (rows.length) {
+      const tenantId = this.db.tenantId;
+      this.db.afterCommit(() => this.realtime.sync(tenantId, 'missions'));
+    }
     return rows.length;
   }
 

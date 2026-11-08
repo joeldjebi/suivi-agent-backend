@@ -18,6 +18,7 @@ import {
   notFound,
 } from '../common/business.exception';
 import { DbService } from '../common/db.service';
+import { RealtimeService } from '../common/realtime.service';
 import { NotificationsService } from '../common/notifications.service';
 import { haversine } from '../outlets/route';
 import { LiveService } from '../positions/live.service';
@@ -111,6 +112,7 @@ export class TransfersService {
     private readonly notifications: NotificationsService,
     private readonly stock: StockService,
     private readonly live: LiveService,
+    private readonly realtime: RealtimeService,
   ) {}
 
   // ------------------------------------------------------------ demande
@@ -922,6 +924,10 @@ export class TransfersService {
         body: `Votre demande de dépannage s’est fermée après ${EXPIRE_AFTER_H} h.`,
         data: { transferId: id },
       });
+    }
+    if (stale.length || toWiden.length || toExpire.length) {
+      const tenantId = this.db.tenantId;
+      this.db.afterCommit(() => this.realtime.sync(tenantId, 'van-sales'));
     }
     return {
       released: stale.length,

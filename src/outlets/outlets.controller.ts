@@ -31,6 +31,7 @@ import { CurrentUser, RequiresFeature, Roles } from '../common/decorators';
 import type { ExportFile } from '../exports/exports.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import {
+  AssignOutletsDto,
   ChangeOutletStatusDto,
   CreateVisitDto,
   CreateOutletDto,
@@ -239,6 +240,22 @@ export class OutletsController {
     @Body() dto: RejectVisitDto,
   ) {
     return this.visits.reject(user, submissionId, dto.reason);
+  }
+
+  /**
+   * Transfert de points de vente à un autre agent (ou sans responsable), historisé :
+   * l'administrateur partout, le chef dans son équipe.
+   */
+  @Roles(Role.Admin, Role.TeamLead)
+  @Post('assign')
+  @HttpCode(200)
+  assign(@CurrentUser() user: AuthUser, @Body() dto: AssignOutletsDto) {
+    return this.outlets.assign(user, {
+      outletIds: dto.outletIds ?? [],
+      fromAgentId: dto.fromAgentId,
+      agentId: dto.agentId ?? null,
+      reason: dto.reason,
+    });
   }
 
   /** Fusion d'un doublon dans la fiche conservée. */

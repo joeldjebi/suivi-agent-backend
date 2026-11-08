@@ -4767,13 +4767,15 @@ describe('Mises à jour en direct des appareils', () => {
       const zone = await t.createZone('Plateau', PLATEAU);
       expect(await received).toEqual({ topic: 'zones' });
 
-      // Les gestes de l'agent lui-même ne sont pas annoncés ; les échecs non plus.
+      // Les gestes des agents aussi (demande, vente, dépannage…), pas le bruit (notifications
+      // lues, appareils…) ni les échecs.
       await agent.api.post('/zone-requests', { zoneId: zone.id }).expect(201);
+      await agent.api.post('/notifications/read-all', {}).expect(204);
       await t.admin.api.patch('/zones/00000000-0000-0000-0000-000000000000', {
         name: 'X',
       });
       await new Promise((resolve) => setTimeout(resolve, 200));
-      expect(seen).toEqual(['zones']);
+      expect(seen).toEqual(['zones', 'zone-requests']);
       expect(foreign).toEqual([]);
     } finally {
       agentSocket.disconnect();
@@ -9736,7 +9738,8 @@ describe('Prise de commande', () => {
     ) => who.api.post(`/orders/${id}/status`, { status: s, comment });
     await status(agent, first.id, 'delivered').expect(200);
     await status(agent, first.id, 'cancelled', 'Erreur').expect(403);
-    await status(other, first.id, 'paid').expect(403);
+    // Commande d'un collègue, pour un client qui n'est pas le sien : introuvable.
+    await status(other, first.id, 'paid').expect(404);
     const paid = (await status(agent, first.id, 'paid').expect(200))
       .body as Body;
     expect(paid.status).toBe('paid');
@@ -9773,10 +9776,15 @@ describe('Prise de commande', () => {
         .products,
     ).toEqual([]);
 
-    // Un autre agent : pas les commandes de son collègue… sauf sur la fiche d'un point de vente.
+    // Un autre agent : pas les commandes de son collègue… sauf sur la fiche d'un point de vente
+    // qu'il voit (ici, remis sans responsable : visible des agents de la zone).
     expect(
       ((await other.api.get('/orders').expect(200)).body as Body).total,
     ).toBe(0);
+    await other.api.get('/orders').query({ outletId: a.id }).expect(404);
+    await admin
+      .post('/outlets/assign', { outletIds: [a.id], agentId: null })
+      .expect(200);
     const onA = (
       await other.api.get('/orders').query({ outletId: a.id }).expect(200)
     ).body as Body;
@@ -10757,6 +10765,15 @@ describe('Vente en camionnette', () => {
         .expect(201)
     ).body as Body;
     expect(truck).toMatchObject({ kind: 'van', agentId: agent.id });
+    // L'agent est prévenu : son camion apparaît aussitôt dans l'app.
+    expect(
+      ((await agent.api.get('/notifications').expect(200)).body as Body[]).map(
+        (n) => [n.type, n.body],
+      ),
+    ).toContainEqual([
+      'stock.van_assigned',
+      'Le camion « Camion 1 » vous est affecté : retrouvez-le dans l’onglet Camion.',
+    ]);
     await admin
       .post('/stock/locations', { kind: 'van', name: 'camion 1' })
       .expect(409);
@@ -10890,10 +10907,11 @@ describe('Vente en camionnette', () => {
       })
       .expect(400)
       .expect((r) => expect(r.body.code).toBe('PAYMENT_METHOD_REQUIRED'));
+    // Client d'un collègue : hors de son périmètre (seule la vente hors zone, motivée, le permet).
     await other.api
       .post('/van-sales/sales', s1Body)
-      .expect(400)
-      .expect((r) => expect(r.body.code).toBe('INSUFFICIENT_STOCK'));
+      .expect(404)
+      .expect((r) => expect(r.body.code).toBe('NOT_FOUND'));
 
     // Crédit : refusé sans plafond ; plafond fixé par l'administrateur seul.
     const credit = (quantity: number, paidAmount: number, soldAt?: string) => ({
@@ -12340,4 +12358,179 @@ describe('Dépannage entre camions et vente hors zone', () => {
       'Vente hors zone chez Maquis Cocody : Rupture urgente du client',
     );
   }, 90_000);
+});
+
+describe('Points de vente confiés à un agent', () => {
+  it('chaque agent voit ses clients ; transfert par l’admin ou le chef de l’équipe, historisé', async () => {
+    const t = await newTenant(app);
+    await t.settings({ useGroups: true });
+    const plateau = await t.createZone('Plateau', PLATEAU);
+    const cocody = await t.createZone('Cocody', COCODY);
+    const leadA = await t.createUser('team_lead');
+    const leadB = await t.createUser('team_lead');
+    const a1 = await t.createUser('agent');
+    const a2 = await t.createUser('agent');
+    const b1 = await t.createUser('agent');
+    await t.createGroup('Équipe A', leadA.id, [a1.id, a2.id], [plateau.id]);
+    await t.createGroup('Équipe B', leadB.id, [b1.id], [cocody.id]);
+    const admin = t.admin.api;
+    const names = async (who: typeof a1, query = '') =>
+      ((await who.api.get(`/outlets${query}`).expect(200)).body.items as Body[])
+        .map((o) => o.name as string)
+        .sort();
+
+    // L'agent qui ajoute un client en devient responsable ; ceux de l'admin restent libres.
+    const mine = (
+      await a1.api
+        .post('/outlets', { name: 'Boutique Awa', ...IN_PLATEAU, force: true })
+        .expect(201)
+    ).body as Body;
+    expect(mine.agent).toEqual({ id: a1.id, name: expect.any(String) });
+    const free = (
+      await admin
+        .post('/outlets', { name: 'Kiosque libre', lat: 5.321, lng: -4.021 })
+        .expect(201)
+    ).body as Body;
+    expect(free.agent).toBeNull();
+    const given = (
+      await admin
+        .post('/outlets', {
+          name: 'Supérette confiée',
+          lat: 5.322,
+          lng: -4.022,
+          agentId: a2.id,
+        })
+        .expect(201)
+    ).body as Body;
+    expect((given.agent as Body).id).toBe(a2.id);
+
+    expect(await names(a1)).toEqual(['Boutique Awa', 'Kiosque libre']);
+    expect(await names(a2)).toEqual(['Kiosque libre', 'Supérette confiée']);
+    await a2.api.get(`/outlets/${mine.id as string}`).expect(404);
+    expect(await names(leadA, `?agentId=${a1.id}`)).toEqual(['Boutique Awa']);
+    expect(await names(leadA, '?agentId=none')).toEqual(['Kiosque libre']);
+
+    // Transfert par le chef, dans son équipe : historisé, les deux agents prévenus.
+    await a1.api
+      .post('/outlets/assign', { outletIds: [mine.id], agentId: a2.id })
+      .expect(403);
+    expect(
+      (
+        await leadA.api
+          .post('/outlets/assign', {
+            outletIds: [mine.id],
+            agentId: a2.id,
+            reason: 'Réorganisation des tournées',
+          })
+          .expect(200)
+      ).body,
+    ).toEqual({ updated: 1 });
+    await a1.api.get(`/outlets/${mine.id as string}`).expect(404);
+    expect(await names(a2)).toEqual([
+      'Boutique Awa',
+      'Kiosque libre',
+      'Supérette confiée',
+    ]);
+    const notified = async (who: typeof a1) =>
+      ((await who.api.get('/notifications').expect(200)).body as Body[]).map(
+        (n) => [n.type, n.body],
+      );
+    expect(await notified(a2)).toContainEqual([
+      'outlets.assigned',
+      '« Boutique Awa » vous est confié : Réorganisation des tournées.',
+    ]);
+    expect(
+      (await notified(a1)).find((n) => n[0] === 'outlets.unassigned')?.[1],
+    ).toMatch(/^« Boutique Awa » n’est plus suivi par vous : confié à /);
+
+    // Le chef ne confie pas à un agent d'une autre équipe ni ne retire à un autre chef.
+    await leadA.api
+      .post('/outlets/assign', { outletIds: [free.id], agentId: b1.id })
+      .expect(403);
+    await admin
+      .post('/outlets/assign', {
+        outletIds: [free.id],
+        agentId: b1.id,
+        reason: 'Client suivi depuis Cocody',
+      })
+      .expect(200);
+    expect(await names(a1)).toEqual([]);
+    await leadA.api
+      .post('/outlets/assign', { outletIds: [free.id], agentId: a1.id })
+      .expect(403)
+      .expect((r) => expect(r.body.message).toContain('autre équipe'));
+    // Déjà son responsable : rien ne change, rien n'est noté.
+    expect(
+      (
+        await admin
+          .post('/outlets/assign', { outletIds: [free.id], agentId: b1.id })
+          .expect(200)
+      ).body,
+    ).toEqual({ updated: 0 });
+
+    // Historique sur la fiche : du plus récent au plus ancien.
+    const sheet = (await admin.get(`/outlets/${mine.id as string}`).expect(200))
+      .body as Body;
+    expect(
+      (sheet.agentChanges as Body[]).map((c) => [
+        (c.from as Body | null)?.id ?? null,
+        (c.to as Body | null)?.id ?? null,
+        (c.by as Body).id,
+        c.reason,
+      ]),
+    ).toEqual([
+      [a1.id, a2.id, leadA.id, 'Réorganisation des tournées'],
+      [null, a1.id, a1.id, null],
+    ]);
+
+    // Retour « sans responsable » : de nouveau visible des agents de la zone.
+    await leadA.api
+      .post('/outlets/assign', { outletIds: [mine.id], agentId: null })
+      .expect(200);
+    expect(await names(a1)).toEqual(['Boutique Awa']);
+
+    // Une mission de visites donne ses points de vente à l'agent, même ceux d'un collègue.
+    const type = (
+      await admin
+        .post('/mission-types', { name: 'Visite', fields: [] })
+        .expect(201)
+    ).body as Body;
+    const mission = (
+      await admin
+        .post('/missions', {
+          typeId: type.id,
+          title: 'Tournée de relance',
+          zoneIds: [plateau.id],
+          progressMethod: 'outlets',
+          visitMode: 'list',
+          outletIds: [given.id],
+          assigneeAgentId: a1.id,
+        })
+        .expect(201)
+    ).body as Body;
+    expect(await names(a1)).toEqual(['Boutique Awa', 'Supérette confiée']);
+    await admin
+      .patch(`/missions/${mission.id as string}`, { isActive: false })
+      .expect(200);
+    expect(await names(a1)).toEqual(['Boutique Awa']);
+
+    // Départ d'un agent : tous ses points de vente d'un coup, à un collègue de l'équipe.
+    await leadA.api
+      .post('/outlets/assign', { fromAgentId: b1.id, agentId: a1.id })
+      .expect(403);
+    expect(
+      (
+        await leadA.api
+          .post('/outlets/assign', {
+            fromAgentId: a2.id,
+            agentId: a1.id,
+            reason: 'Départ en congé',
+          })
+          .expect(200)
+      ).body,
+    ).toEqual({ updated: 1 });
+    expect(await names(a1)).toEqual(['Boutique Awa', 'Supérette confiée']);
+    expect(await names(a2)).toEqual(['Boutique Awa']);
+    await admin.post('/outlets/assign', { agentId: a1.id }).expect(400);
+  });
 });

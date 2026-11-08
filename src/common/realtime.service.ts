@@ -28,6 +28,14 @@ export class RealtimeService {
     this.server.to(roomNames).emit(event, payload);
   }
 
+  /**
+   * « Ces données ont changé, relisez-les » : à tous les appareils connectés de la structure.
+   * Seul le sujet circule (missions, outlets, van-sales…), jamais les données.
+   */
+  sync(tenantId: string, topic: string) {
+    this.emit([rooms.tenant(tenantId)], 'sync', { topic });
+  }
+
   /** Session coupée (désactivation, mot de passe changé…) : connexions en direct fermées. */
   disconnectUser(userId: string) {
     this.server?.in(rooms.user(userId)).disconnectSockets(true);
