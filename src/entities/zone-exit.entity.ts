@@ -42,6 +42,10 @@ export class ZoneExit {
   @Column({ name: 'alerted_at', type: 'timestamptz', nullable: true })
   alertedAt: Date | null;
 
+  /** Sortie justifiée (vente d'urgence chez un client hors zone…). */
+  @Column({ type: 'text', nullable: true })
+  justification: string | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 }

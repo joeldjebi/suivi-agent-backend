@@ -14,6 +14,7 @@ import { DaysService } from '../days/days.service';
 import { MissionsService } from '../missions/missions.service';
 import { OutletsService } from '../outlets/outlets.service';
 import { PositionsService } from '../positions/positions.service';
+import { TransfersService } from '../van-sales/transfers.service';
 import { ZoneRequestsService } from '../zone-requests/zone-requests.service';
 
 /**
@@ -38,6 +39,7 @@ export class JobsService {
     private readonly alerts: AlertsService,
     private readonly reports: ReportsService,
     private readonly outlets: OutletsService,
+    private readonly transfers: TransfersService,
   ) {}
 
   /**
@@ -70,6 +72,8 @@ export class JobsService {
       await this.alerts.scan(settings);
       // Bilan de fin de journée aux responsables, à l'heure réglée (une fois par jour).
       await this.reports.sendDailyReports(settings);
+      // Dépannages : réservations libérées (1 h), demandes élargies (10 min), expirées (4 h).
+      await this.transfers.sweep();
     });
   }
 

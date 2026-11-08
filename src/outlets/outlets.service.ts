@@ -378,6 +378,66 @@ export class OutletsService {
     return this.findVisible(user, id);
   }
 
+  /** Client de la structure, sans contrôle de périmètre (vente d'urgence hors zone). */
+  async findAny(id: string): Promise<OutletView> {
+    const [row] = await this.db.manager.query<Row[]>(
+      `SELECT ${SELECT} ${FROM} WHERE o.id = $1`,
+      [id],
+    );
+    if (!row) throw notFound('Point de vente');
+    return view(row);
+  }
+
+  /**
+   * Clients de toute la structure, pour une vente d'urgence hors zone : par nom, ou les plus
+   * proches d'une position (5 km). Chaque client dit s'il est dans le périmètre de l'agent.
+   */
+  async searchAll(
+    user: AuthUser,
+    q: { q?: string; lat?: number; lng?: number },
+  ) {
+    const scope = await this.scope(user);
+    const params: unknown[] = [];
+    const p = (v: unknown) => {
+      params.push(v);
+      return `$${params.length}`;
+    };
+    const near = q.lat != null && q.lng != null;
+    const point = near
+      ? `ST_SetSRID(ST_MakePoint(${p(q.lng)}, ${p(q.lat)}), 4326)::geography`
+      : null;
+    const where = [`o.status <> 'closed'`];
+    if (q.q) where.push(`o.name ILIKE ${p(`%${q.q}%`)}`);
+    if (point)
+      where.push(
+        `o.location IS NOT NULL AND ST_DWithin(o.location::geography, ${point}, 5000)`,
+      );
+    if (!q.q && !point) return [];
+    return this.db.manager.query<
+      {
+        id: string;
+        name: string;
+        category: string | null;
+        landmark: string | null;
+        lat: number | null;
+        lng: number | null;
+        zoneName: string | null;
+        distance: number | null;
+        inScope: boolean;
+      }[]
+    >(
+      `SELECT o.id, o.name, o.category, o.landmark, ST_Y(o.location) AS lat, ST_X(o.location) AS lng,
+              (SELECT z.name FROM zones z WHERE z.is_active AND o.location IS NOT NULL
+                 AND ST_Covers(z.area, o.location) ORDER BY z.name LIMIT 1) AS "zoneName",
+              ${point ? `round(ST_Distance(o.location::geography, ${point}))::int` : 'NULL::int'} AS distance,
+              ${this.scopeSql(scope, p)} AS "inScope"
+       FROM outlets o
+       WHERE ${where.join(' AND ')}
+       ORDER BY ${point ? 'distance' : 'o.name'} LIMIT 20`,
+      params,
+    );
+  }
+
   /** Position enregistrée lors d'une visite d'un point de vente qui n'en avait pas. */
   async locateFromVisit(
     outletId: string,

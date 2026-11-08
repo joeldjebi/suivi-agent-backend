@@ -31,6 +31,8 @@ export const StockMovementKind = {
   Loss: "loss",
   /** Inventaire : quantité comptée, l'écart corrige le stock */
   Adjustment: "adjustment",
+  /** Dépannage : camion → camion d'un collègue, remis en main propre (code scanné) */
+  Transfer: "transfer",
 } as const;
 export type StockMovementKind =
   (typeof StockMovementKind)[keyof typeof StockMovementKind];
@@ -43,6 +45,7 @@ export const STOCK_MOVEMENT_KIND_LABELS: Record<StockMovementKind, string> = {
   sale_cancel: "Vente annulée",
   loss: "Casse ou perte",
   adjustment: "Inventaire",
+  transfer: "Dépannage",
 };
 
 export const StockMovementStatus = {
@@ -82,10 +85,66 @@ export const SaleFlag = {
   NegativeStock: "negative_stock",
   /** Le crédit accordé dépasse le plafond du client */
   OverCreditLimit: "over_credit_limit",
+  /** Client hors des zones de l'agent (urgence, motif donné) */
+  OutOfZone: "out_of_zone",
 } as const;
 export type SaleFlag = (typeof SaleFlag)[keyof typeof SaleFlag];
 
 export const SALE_FLAG_LABELS: Record<SaleFlag, string> = {
   negative_stock: "Stock du camion insuffisant",
   over_credit_limit: "Plafond de crédit dépassé",
+  out_of_zone: "Vente hors zone",
+};
+
+/**
+ * Dépannage entre camions (partagé) : l'agent en rupture liste ce qu'il lui faut ; la demande
+ * est diffusée aux collègues proches qui ont ces produits. Chacun peut prendre une part (tout
+ * ou partie) : elle est réservée pour lui, le reste reste ouvert aux autres. Sur place, chaque
+ * collègue scanne le code du demandeur et remet sa part (le stock passe d'un camion à l'autre).
+ */
+export const TransferStatus = {
+  /** Il reste des produits à trouver */
+  Open: "open",
+  /** Tout est réservé par des collègues, en attente des remises */
+  Covered: "covered",
+  /** Tout a été remis */
+  Done: "done",
+  /** Clos par le demandeur (« j'ai ce qu'il me faut ») */
+  Closed: "closed",
+  /** Fermée automatiquement (délai dépassé) */
+  Expired: "expired",
+} as const;
+export type TransferStatus =
+  (typeof TransferStatus)[keyof typeof TransferStatus];
+
+export const TRANSFER_STATUS_LABELS: Record<TransferStatus, string> = {
+  open: "En recherche",
+  covered: "Tout est réservé",
+  done: "Terminé",
+  closed: "Clos",
+  expired: "Expiré",
+};
+
+/** Part prise par un collègue dans une demande de dépannage. */
+export const TransferLegStatus = {
+  /** Collègue d'une autre équipe : en attente de l'accord de son chef */
+  Approval: "approval",
+  /** Réservée : le collègue vient la remettre */
+  Accepted: "accepted",
+  /** Remise (code scanné) */
+  Done: "done",
+  /** Libérée : abandonnée par le collègue, délai dépassé ou demande close */
+  Released: "released",
+  /** Refusée par le chef du collègue */
+  Rejected: "rejected",
+} as const;
+export type TransferLegStatus =
+  (typeof TransferLegStatus)[keyof typeof TransferLegStatus];
+
+export const TRANSFER_LEG_STATUS_LABELS: Record<TransferLegStatus, string> = {
+  approval: "En attente du chef",
+  accepted: "Réservée",
+  done: "Remise",
+  released: "Libérée",
+  rejected: "Refusée par le chef",
 };

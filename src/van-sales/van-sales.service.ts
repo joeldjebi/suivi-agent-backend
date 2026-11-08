@@ -23,12 +23,15 @@ import { NotificationsService } from '../common/notifications.service';
 import { OrdersService } from '../orders/orders.service';
 import { PaymentsService } from '../orders/payments.service';
 import { distanceM, OutletsService } from '../outlets/outlets.service';
+import type { OutletView } from '../outlets/outlets.service';
+import { assertPresence } from '../outlets/visit-rules';
 import { receiptPdf } from './receipt';
 import { StockService } from './stock.service';
 import type {
   CashQuery,
   CreatePaymentDto,
   CreateSaleDto,
+  OutletSearchQuery,
   RemittanceDto,
 } from './van-sales.dto';
 
@@ -77,8 +80,9 @@ export class VanSalesService {
       throw badRequest('INVALID_DATE', 'L’heure de la vente est dans le futur');
     const live = Date.now() - soldAt.getTime() < LIVE_MS;
 
+    const target = await this.saleOutlet(user, dto);
     const { outlet, priceList, currency, lines, total } =
-      await this.orders.price(user, dto.outletId, dto.lines);
+      await this.orders.price(user, dto.outletId, dto.lines, target.outlet);
     const paid = money(dto.paidAmount);
     if (paid > total)
       throw badRequest(
@@ -92,7 +96,7 @@ export class VanSalesService {
       );
     const credit = money(total - paid);
 
-    const flags: SaleFlag[] = [];
+    const flags: SaleFlag[] = target.outOfZone ? [SaleFlag.OutOfZone] : [];
     // Stock du camion.
     const stock = await this.stock.quantities(
       van.id,
@@ -138,9 +142,10 @@ export class VanSalesService {
       const [{ id }] = await t.query<{ id: string }[]>(
         `INSERT INTO orders (tenant_id, number, client_id, outlet_id, agent_id, price_list_id,
                              price_list_name, total, currency, note, lat, lng, distance_m, taken_at,
-                             kind, location_id, status, delivered_at, paid_at, flags)
+                             kind, location_id, status, delivered_at, paid_at, flags,
+                             out_of_zone_reason)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-                 'sale', $15, $16, $14, $17, $18) RETURNING id`,
+                 'sale', $15, $16, $14, $17, $18, $19) RETURNING id`,
         [
           this.db.tenantId,
           next,
@@ -160,6 +165,7 @@ export class VanSalesService {
           status,
           status === OrderStatus.Paid ? soldAt : null,
           flags,
+          target.outOfZone ? dto.outOfZoneReason! : null,
         ],
       );
       await this.orders.insertLines(t, id, lines);
@@ -211,8 +217,114 @@ export class VanSalesService {
       return id;
     });
 
-    if (flags.length) await this.signal(user, id, flags);
+    if (target.outOfZone) await this.outOfZone(user, id, outlet, dto);
+    const toVerify = flags.filter((f) => f !== SaleFlag.OutOfZone);
+    if (toVerify.length) await this.signal(user, id, toVerify);
     return this.orders.get(user, id);
+  }
+
+  /** Clients de toute la structure, pour une vente d'urgence hors zone. */
+  searchOutlets(user: AuthUser, q: OutletSearchQuery) {
+    return this.outlets.searchAll(user, q);
+  }
+
+  /** Client hors zone choisi : ses informations, ses prix et son crédit (préparer la vente). */
+  async outOfZoneContext(user: AuthUser, outletId: string) {
+    const outlet = await this.outlets.findAny(outletId);
+    const [catalog, balance] = await Promise.all([
+      this.orders.catalog(user, outletId, outlet),
+      this.payments.balance(outletId),
+    ]);
+    return {
+      outlet: {
+        id: outlet.id,
+        name: outlet.name,
+        category: outlet.category,
+        landmark: outlet.landmark,
+        lat: outlet.lat,
+        lng: outlet.lng,
+        zoneName: outlet.zone?.name ?? null,
+        status: outlet.status,
+      },
+      catalog,
+      balance,
+    };
+  }
+
+  /**
+   * Client de la vente : dans le périmètre de l'agent ; sinon, vente d'urgence hors zone,
+   * seulement avec un motif et l'agent sur place (distance des visites, 50 m au moins).
+   */
+  private async saleOutlet(
+    user: AuthUser,
+    dto: CreateSaleDto,
+  ): Promise<{ outlet: OutletView; outOfZone: boolean }> {
+    try {
+      return {
+        outlet: await this.outlets.findForVisit(user, dto.outletId),
+        outOfZone: false,
+      };
+    } catch (error) {
+      if (!dto.outOfZoneReason || (error as { status?: number }).status !== 404)
+        throw error;
+    }
+    const outlet = await this.outlets.findAny(dto.outletId);
+    if (outlet.lat == null || outlet.lng == null)
+      throw badRequest(
+        'OUTLET_NOT_LOCATED',
+        `« ${outlet.name} » n’a pas de position : la vente hors zone se fait sur place, chez un client localisé`,
+      );
+    const settings = await this.access.settings();
+    assertPresence(
+      outlet,
+      { lat: dto.lat, lng: dto.lng, accuracy: dto.accuracy },
+      Math.max(settings.visitRadiusMeters ?? 0, 50),
+    );
+    return { outlet, outOfZone: true };
+  }
+
+  /**
+   * Vente hors zone enregistrée : la sortie de zone en cours est justifiée, et les chefs (de
+   * l'agent et de la zone du client) sont prévenus.
+   */
+  private async outOfZone(
+    user: AuthUser,
+    orderId: string,
+    outlet: OutletView,
+    dto: CreateSaleDto,
+  ) {
+    const m = this.db.manager;
+    const reason = dto.outOfZoneReason!;
+    await m.query(
+      `UPDATE zone_exits SET justification = $2 WHERE agent_id = $1 AND ended_at IS NULL`,
+      [user.id, `Vente hors zone chez ${outlet.name} : ${reason}`],
+    );
+    const agent = await this.access.getAgent(user.id);
+    const approvers = await this.access.approverIds(
+      agent,
+      await this.access.settings(),
+    );
+    const zoneLeaders = await m.query<{ id: string }[]>(
+      `SELECT DISTINCT g.leader_id AS id
+       FROM groups g
+       JOIN group_zones gz ON gz.group_id = g.id
+       JOIN zones z ON z.id = gz.zone_id
+       WHERE g.is_active AND g.leader_id IS NOT NULL AND z.is_active
+         AND ST_Covers(z.area, (SELECT location FROM outlets WHERE id = $1))`,
+      [outlet.id],
+    );
+    const order = await this.orders.get(user, orderId);
+    await this.notifications.notify(
+      [...approvers, ...zoneLeaders.map((l) => l.id)].filter(
+        (id) => id !== user.id,
+      ),
+      {
+        type: 'sale.out_of_zone',
+        title: 'Vente hors zone',
+        body: `${order.reference} · ${agent.firstName} ${agent.lastName} chez ${outlet.name} : ${reason}`,
+        data: { orderId, outletId: outlet.id },
+      },
+    );
   }
 
   /** Vente arrivée sans réseau et incohérente : les responsables de l'agent sont prévenus. */

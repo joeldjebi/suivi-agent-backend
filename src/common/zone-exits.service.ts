@@ -212,9 +212,11 @@ export class ZoneExitsService {
     await this.notifications.notify(recipients, {
       type: 'zone_exit',
       title: `${agent.firstName} ${agent.lastName} : hors zone`,
-      body: exit.endedAt
-        ? `${minutes} min hors de la zone ${zone.name}, jusqu’à ${distance}. Revenu(e) depuis.`
-        : `Hors de la zone ${zone.name} depuis ${minutes} min, à ${distance}.`,
+      body:
+        (exit.endedAt
+          ? `${minutes} min hors de la zone ${zone.name}, jusqu’à ${distance}. Revenu(e) depuis.`
+          : `Hors de la zone ${zone.name} depuis ${minutes} min, à ${distance}.`) +
+        (exit.justification ? ` Justifiée : ${exit.justification}.` : ''),
       data: {
         exitId: exit.id,
         agentId: exit.agentId,
@@ -296,6 +298,7 @@ export function toInfo(exit: ZoneExit): ZoneExitInfo {
     endReason: exit.endReason,
     maxDistanceM: exit.maxDistanceM,
     alertedAt: exit.alertedAt?.toISOString() ?? null,
+    justification: exit.justification ?? null,
   };
 }
 

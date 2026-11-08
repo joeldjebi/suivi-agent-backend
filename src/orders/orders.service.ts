@@ -19,7 +19,11 @@ import {
 } from '../common/business.exception';
 import { DbService } from '../common/db.service';
 import { PlatformSettings } from '../entities';
-import { distanceM, OutletsService } from '../outlets/outlets.service';
+import {
+  distanceM,
+  type OutletView,
+  OutletsService,
+} from '../outlets/outlets.service';
 import { PaymentsService } from './payments.service';
 import type {
   ChangeOrderStatusDto,
@@ -74,6 +78,7 @@ const ORDER_SELECT = `
   o.price_list_name AS "priceListName", o.status, o.total::float8 AS total,
   o.paid_amount::float8 AS "paidAmount", o.currency,
   o.location_id AS "locationId", sl.name AS "locationName", o.flags,
+  o.out_of_zone_reason AS "outOfZoneReason",
   o.note, o.distance_m AS distance, o.taken_at AS "takenAt",
   o.delivered_at AS "deliveredAt", o.paid_at AS "paidAt", o.cancelled_at AS "cancelledAt",
   o.cancel_reason AS "cancelReason",
@@ -271,8 +276,9 @@ export class OrdersService {
   }
 
   /** Catalogue de l'agent pour un point de vente : les produits qui ont un prix pour lui. */
-  async catalog(user: AuthUser, outletId: string) {
-    const outlet = await this.outlets.findForVisit(user, outletId);
+  async catalog(user: AuthUser, outletId: string, preloaded?: OutletView) {
+    const outlet =
+      preloaded ?? (await this.outlets.findForVisit(user, outletId));
     const list = await this.listFor(outlet.priceList?.id ?? null);
     const products = list
       ? await this.db.manager.query<Record<string, unknown>[]>(
@@ -304,14 +310,17 @@ export class OrdersService {
     user: AuthUser,
     outletId: string,
     input: { productId: string; quantity: number }[],
+    /** Client déjà chargé (vente hors zone, hors du périmètre de l'agent) */
+    preloaded?: OutletView,
   ) {
-    const outlet = await this.outlets.findForVisit(user, outletId);
+    const outlet =
+      preloaded ?? (await this.outlets.findForVisit(user, outletId));
     if (outlet.status === 'closed')
       throw badRequest(
         'OUTLET_CLOSED',
         `« ${outlet.name} » est fermé : il ne peut plus commander`,
       );
-    const catalog = await this.catalog(user, outletId);
+    const catalog = await this.catalog(user, outletId, outlet);
     if (!catalog.priceList)
       throw badRequest(
         'NO_PRICE_LIST',

@@ -17,6 +17,7 @@ import { DEFAULT_LANDING } from '../src/landing/landing.defaults';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { FileStorage } from '../src/common/file-storage';
+import { LiveService } from '../src/positions/live.service';
 import { PhotosService } from '../src/photos/photos.service';
 import { PhotoAiService } from '../src/photo-ai/photo-ai.service';
 import {
@@ -10927,7 +10928,13 @@ describe('Vente en camionnette', () => {
       .expect((r) => expect(r.body.code).toBe('CREDIT_LIMIT_EXCEEDED'));
 
     // Vente arrivée après une coupure de réseau : enregistrée, mais signalée.
-    const tenMinutesAgo = new Date(Date.now() - 10 * 60_000).toISOString();
+    // Vente « sans réseau » il y a 10 minutes, mais toujours aujourd'hui (caisse du jour),
+    // même si le test tourne juste après minuit.
+    const midnight = new Date();
+    midnight.setUTCHours(0, 0, 0, 0);
+    const tenMinutesAgo = new Date(
+      Math.max(Date.now() - 10 * 60_000, midnight.getTime() + 1000),
+    ).toISOString();
     const s4 = (
       await agent.api
         .post('/van-sales/sales', credit(20, 0, tenMinutesAgo))
@@ -11797,6 +11804,31 @@ describe('Suppression définitive d’une structure', () => {
       ).toBe('INVALID_PASSWORD');
       await t.admin.api.get('/outlets').expect(200);
 
+      // Une autre connexion tient une ligne de la structure (fenêtre pgAdmin restée ouverte…) :
+      // pas d'attente sans fin, un refus clair après le délai, et rien n'est supprimé.
+      const holder = owner.createQueryRunner();
+      await holder.connect();
+      await holder.startTransaction();
+      await holder.query(
+        `SELECT 1 FROM users WHERE tenant_id = $1 FOR UPDATE`,
+        [t.tenantId],
+      );
+      try {
+        const started = Date.now();
+        expect(
+          (
+            await proprio
+              .post(url, { confirmName: name, password: 'Editeur2026!' })
+              .expect(409)
+          ).body.code,
+        ).toBe('TENANT_BUSY');
+        expect(Date.now() - started).toBeLessThan(25_000);
+      } finally {
+        await holder.rollbackTransaction();
+        await holder.release();
+      }
+      await t.admin.api.get('/outlets').expect(200);
+
       const done = (
         await proprio
           .post(url, { confirmName: ` ${name} `, password: 'Editeur2026!' })
@@ -11852,5 +11884,460 @@ describe('Suppression définitive d’une structure', () => {
           [previousOwner[0].id],
         );
     }
-  });
+  }, 60_000);
+});
+
+describe('Dépannage entre camions et vente hors zone', () => {
+  it('dépannage partagé : diffusion, parts, accord du chef, code scanné, délais ; vente hors zone', async () => {
+    const t = await newTenant(app);
+    await t.settings({ useGroups: true, submissionRequiresDay: false });
+    const plateau = await t.createZone('Plateau', PLATEAU);
+    const cocody = await t.createZone('Cocody', COCODY);
+    const leadA = await t.createUser('team_lead');
+    const leadB = await t.createUser('team_lead');
+    const a1 = await t.createUser('agent');
+    const a2 = await t.createUser('agent');
+    const a3 = await t.createUser('agent');
+    const b1 = await t.createUser('agent');
+    await t.createGroup(
+      'Équipe A',
+      leadA.id,
+      [a1.id, a2.id, a3.id],
+      [plateau.id],
+    );
+    await t.createGroup('Équipe B', leadB.id, [b1.id], [cocody.id]);
+    const admin = t.admin.api;
+    const jobs = app.get(JobsService);
+    const product = async (name: string) =>
+      (
+        await admin
+          .post('/products', { name, own: true, unit: 'Bouteille' })
+          .expect(201)
+      ).body as Body;
+    const coca = await product('Coca-Cola');
+    const fanta = await product('Fanta');
+    const C = coca.id as string;
+    const F = fanta.id as string;
+    const list = (
+      await admin
+        .post('/orders/price-lists', { name: 'Détaillant' })
+        .expect(201)
+    ).body as Body;
+    await admin
+      .put('/orders/prices', {
+        items: [
+          { priceListId: list.id, productId: C, price: 300 },
+          { priceListId: list.id, productId: F, price: 250 },
+        ],
+      })
+      .expect(200);
+    const depot = (
+      await admin
+        .post('/stock/locations', { kind: 'depot', name: 'Dépôt' })
+        .expect(201)
+    ).body as Body;
+    await admin
+      .post('/stock/receipts', {
+        depotId: depot.id,
+        lines: [
+          { productId: C, quantity: 200 },
+          { productId: F, quantity: 200 },
+        ],
+      })
+      .expect(201);
+    type Agent = typeof a1;
+    const vans: Record<string, Body> = {};
+    for (const [name, agent] of [
+      ['Camion A1', a1],
+      ['Camion A2', a2],
+      ['Camion A3', a3],
+      ['Camion B1', b1],
+    ] as const)
+      vans[agent.id] = (
+        await admin
+          .post('/stock/locations', { kind: 'van', name, agentId: agent.id })
+          .expect(201)
+      ).body as Body;
+    const loadTo = async (agent: Agent, lines: Body[]) => {
+      const mv = (
+        await admin
+          .post('/stock/loads', {
+            depotId: depot.id,
+            vanId: vans[agent.id].id,
+            lines,
+          })
+          .expect(201)
+      ).body as Body;
+      await agent.api
+        .post(`/stock/movements/${mv.id as string}/confirm`, {})
+        .expect(200);
+    };
+    await loadTo(a2, [{ productId: C, quantity: 24 }]);
+    await loadTo(a3, [
+      { productId: C, quantity: 12 },
+      { productId: F, quantity: 12 },
+    ]);
+    await loadTo(b1, [
+      { productId: C, quantity: 24 },
+      { productId: F, quantity: 24 },
+    ]);
+    const qty = async (agent: Agent, productId: string) =>
+      (
+        ((await agent.api.get('/van-sales/me').expect(200)).body as Body)
+          .stock as Body[]
+      ).find((s) => s.productId === productId)?.quantity ?? 0;
+    const notifs = async (agent: Agent, type: string) =>
+      (
+        await owner.query<{ body: string }[]>(
+          `SELECT body FROM notifications WHERE user_id = $1 AND type = $2 ORDER BY created_at`,
+          [agent.id, type],
+        )
+      ).map((n) => n.body);
+
+    // Positions en direct : A2 à ~300 m, A3 à ~900 m, B1 à quelques km.
+    const live = app.get(LiveService);
+    const at = (agentId: string, lat: number, lng: number) =>
+      live.upsert(t.tenantId, {
+        agentId,
+        zoneId: null,
+        status: 'active',
+        lat,
+        lng,
+        accuracy: 5,
+        batteryLevel: null,
+        isMocked: false,
+        outsideZone: false,
+        recordedAt: new Date().toISOString(),
+        dayId: randomUUID(),
+        receivedAt: new Date().toISOString(),
+      } as never);
+    await at(a1.id, 5.32, -4.02);
+    await at(a2.id, 5.3227, -4.02);
+    await at(a3.id, 5.328, -4.02);
+    await at(b1.id, 5.355, -3.98);
+
+    // A1 liste ce qu'il lui faut : envoyé aux plus proches de son équipe qui en ont.
+    const body = {
+      clientId: randomUUID(),
+      lines: [
+        { productId: C, quantity: 30 },
+        { productId: F, quantity: 12 },
+      ],
+      note: 'Rupture chez Mama Awa',
+    };
+    const req = (await a1.api.post('/van-sales/transfers', body).expect(201))
+      .body as Body;
+    expect(req).toMatchObject({ status: 'open', legs: [] });
+    expect(typeof req.token).toBe('string');
+    const token = req.token as string;
+    const id = req.id as string;
+    expect(
+      (
+        (await a1.api.post('/van-sales/transfers', body).expect(201))
+          .body as Body
+      ).id,
+    ).toBe(id);
+    expect(await notifs(a2, 'transfer.requested')).toEqual([
+      expect.stringMatching(
+        /à 30\d m\) a besoin de : 30 × Coca-Cola, 12 × Fanta/,
+      ),
+    ]);
+    expect(await notifs(a3, 'transfer.requested')).toHaveLength(1);
+    expect(await notifs(b1, 'transfer.requested')).toHaveLength(0);
+    // L'autre équipe ne la voit pas encore ; A2 la voit, avec son stock.
+    expect(
+      (await b1.api.get('/van-sales/transfers/nearby').expect(200)).body,
+    ).toEqual([]);
+    await b1.api.get(`/van-sales/transfers/${id}`).expect(404);
+    const seen = (await a2.api.get('/van-sales/transfers/nearby').expect(200))
+      .body as Body[];
+    expect(seen).toEqual([
+      expect.objectContaining({
+        id,
+        needsApproval: false,
+        myStock: { [C]: 24, [F]: 0 },
+        token: null,
+      }),
+    ]);
+
+    // A2 prend sa part (tout son Coca) ; le reste reste ouvert.
+    const accept = (agent: Agent, lines: Body[]) =>
+      agent.api.post(`/van-sales/transfers/${id}/accept`, { lines });
+    await accept(a2, [{ productId: C, quantity: 30 }])
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('INSUFFICIENT_STOCK'));
+    const afterA2 = (
+      await accept(a2, [{ productId: C, quantity: 24 }]).expect(200)
+    ).body as Body;
+    expect(afterA2.status).toBe('open');
+    expect(afterA2.lines).toEqual([
+      expect.objectContaining({
+        productId: C,
+        requested: 30,
+        reserved: 24,
+        remaining: 6,
+      }),
+      expect.objectContaining({
+        productId: F,
+        requested: 12,
+        reserved: 0,
+        remaining: 12,
+      }),
+    ]);
+    await accept(a2, [{ productId: C, quantity: 1 }])
+      .expect(409)
+      .expect((r) => expect(r.body.code).toBe('ALREADY_TAKEN'));
+    expect(await notifs(a1, 'transfer.accepted')).toHaveLength(1);
+    // A3 complète : plus que le reste refusé, puis tout est réservé.
+    await accept(a3, [{ productId: C, quantity: 12 }])
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('MORE_THAN_NEEDED'));
+    const covered = (
+      await accept(a3, [
+        { productId: C, quantity: 6 },
+        { productId: F, quantity: 12 },
+      ]).expect(200)
+    ).body as Body;
+    expect(covered.status).toBe('covered');
+    await accept(b1, [{ productId: C, quantity: 1 }]).expect(404);
+
+    // Remises sur place, au plus sa part ; A2 remet moins : le reste se rouvre.
+    const handover = (
+      agent: Agent,
+      lines: Body[],
+      code = token,
+      clientId = randomUUID(),
+    ) =>
+      agent.api.post('/van-sales/transfers/handover', {
+        clientId,
+        token: code,
+        lines,
+      });
+    await handover(a2, [{ productId: C, quantity: 1 }], 'code-faux').expect(
+      404,
+    );
+    await handover(a2, [{ productId: C, quantity: 25 }])
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('MORE_THAN_RESERVED'));
+    await handover(a2, [{ productId: F, quantity: 1 }])
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('UNKNOWN_LINE'));
+    await handover(b1, [{ productId: C, quantity: 1 }]).expect(403);
+    const key = randomUUID();
+    const afterHandover = (
+      await handover(a2, [{ productId: C, quantity: 20 }], token, key).expect(
+        201,
+      )
+    ).body as Body;
+    expect(afterHandover.status).toBe('open');
+    expect((afterHandover.lines as Body[])[0]).toMatchObject({
+      given: 20,
+      reserved: 6,
+      remaining: 4,
+    });
+    expect(await qty(a1, C)).toBe(20);
+    expect(await qty(a2, C)).toBe(4);
+    await handover(a2, [{ productId: C, quantity: 20 }], token, key).expect(
+      201,
+    );
+    expect(await qty(a2, C)).toBe(4);
+    await handover(a2, [{ productId: C, quantity: 1 }]).expect(403);
+    expect((await notifs(a1, 'transfer.done'))[0]).toContain('Moins que prévu');
+    await handover(a3, [
+      { productId: C, quantity: 6 },
+      { productId: F, quantity: 12 },
+    ]).expect(201);
+    expect(await qty(a1, F)).toBe(12);
+    const movements = (
+      await admin.get('/stock/movements?kind=transfer').expect(200)
+    ).body as Body;
+    expect(
+      ((movements.items ?? movements) as Body[]).filter(
+        (m) => m.kind === 'transfer',
+      ),
+    ).toHaveLength(2);
+
+    // 10 minutes sans tout trouver : élargie à l'autre équipe (accord de son chef).
+    await owner.query(
+      `UPDATE van_transfers SET created_at = now() - interval '15 minutes' WHERE id = $1`,
+      [id],
+    );
+    await jobs.everyMinute();
+    expect(await notifs(b1, 'transfer.requested')).toEqual([
+      expect.stringContaining('4 × Coca-Cola'),
+    ]);
+    const forB1 = (await b1.api.get('/van-sales/transfers/nearby').expect(200))
+      .body as Body[];
+    expect(forB1).toEqual([
+      expect.objectContaining({ id, needsApproval: true }),
+    ]);
+    const pending = (
+      await accept(b1, [{ productId: C, quantity: 4 }]).expect(200)
+    ).body as Body;
+    const legB1 = (pending.legs as Body[]).find((l) => l.giverId === b1.id)!;
+    expect(legB1).toMatchObject({ status: 'approval', crossTeam: true });
+    await handover(b1, [{ productId: C, quantity: 4 }])
+      .expect(409)
+      .expect((r) => expect(r.body.code).toBe('LEG_NOT_APPROVED'));
+    await leadA.api
+      .post(`/van-sales/transfers/legs/${legB1.id as string}/approve`, {})
+      .expect(403);
+    await leadB.api
+      .post(`/van-sales/transfers/legs/${legB1.id as string}/approve`, {})
+      .expect(200);
+
+    // Réservation non honorée en 1 h : libérée, la demande se rouvre.
+    await owner.query(
+      `UPDATE van_transfer_legs SET accepted_at = now() - interval '70 minutes' WHERE id = $1`,
+      [legB1.id],
+    );
+    await jobs.everyMinute();
+    const reopened = (
+      await a1.api.get(`/van-sales/transfers/${id}`).expect(200)
+    ).body as Body;
+    expect(reopened.status).toBe('open');
+    expect(
+      (reopened.legs as Body[]).find((l) => l.id === legB1.id),
+    ).toMatchObject({
+      status: 'released',
+      releaseReason: expect.stringContaining('Délai dépassé'),
+    });
+    expect(await notifs(b1, 'transfer.leg_released')).toHaveLength(1);
+    // Nouvelle proposition de B1, refusée par son chef ; A1 clôt sa demande.
+    const again = (
+      await accept(b1, [{ productId: C, quantity: 4 }]).expect(200)
+    ).body as Body;
+    const legAgain = (again.legs as Body[]).find(
+      (l) => l.status === 'approval',
+    )!;
+    await leadB.api
+      .post(`/van-sales/transfers/legs/${legAgain.id as string}/reject`, {
+        note: 'Pas aujourd’hui',
+      })
+      .expect(200);
+    await a2.api.post(`/van-sales/transfers/${id}/close`).expect(403);
+    const closed = (
+      await a1.api.post(`/van-sales/transfers/${id}/close`).expect(200)
+    ).body as Body;
+    expect(closed).toMatchObject({ status: 'closed', token: null });
+    await handover(a2, [{ productId: C, quantity: 1 }]).expect(409);
+    expect(
+      (
+        (await leadA.api.get('/van-sales/transfers?state=all').expect(200))
+          .body as Body[]
+      ).map((x) => x.id),
+    ).toContain(id);
+
+    // Demande oubliée : fermée d'elle-même après 4 h.
+    const old = (
+      await a1.api
+        .post('/van-sales/transfers', {
+          clientId: randomUUID(),
+          lines: [{ productId: F, quantity: 2 }],
+        })
+        .expect(201)
+    ).body as Body;
+    await owner.query(
+      `UPDATE van_transfers SET created_at = now() - interval '5 hours' WHERE id = $1`,
+      [old.id],
+    );
+    await jobs.everyMinute();
+    expect(
+      (
+        (
+          await a1.api
+            .get(`/van-sales/transfers/${old.id as string}`)
+            .expect(200)
+        ).body as Body
+      ).status,
+    ).toBe('expired');
+
+    // ---------------------------------------------------------------- vente hors zone
+    const COCODY_POINT = { lat: 5.355, lng: -3.98 };
+    const maquis = (
+      await admin
+        .post('/outlets', { name: 'Maquis Cocody', ...COCODY_POINT })
+        .expect(201)
+    ).body as Body;
+    await admin
+      .patch(`/outlets/${maquis.id as string}`, { priceListId: list.id })
+      .expect(200);
+    const found = (
+      await a1.api.get('/van-sales/outlets/search?q=maquis').expect(200)
+    ).body as Body[];
+    expect(found).toEqual([
+      expect.objectContaining({
+        id: maquis.id,
+        inScope: false,
+        zoneName: 'Cocody',
+      }),
+    ]);
+    const near = (
+      await a1.api
+        .get(
+          `/van-sales/outlets/search?lat=${COCODY_POINT.lat}&lng=${COCODY_POINT.lng}`,
+        )
+        .expect(200)
+    ).body as Body[];
+    expect(near[0]).toMatchObject({ id: maquis.id, distance: 0 });
+    const context = (
+      await a1.api
+        .get(`/van-sales/outlets/${maquis.id as string}/out-of-zone`)
+        .expect(200)
+    ).body as Body;
+    expect(context).toMatchObject({
+      outlet: { id: maquis.id, name: 'Maquis Cocody', zoneName: 'Cocody' },
+      catalog: { priceList: { id: list.id } },
+      balance: { creditLimit: null },
+    });
+    expect((context.catalog as Body).products).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: C, price: 300 })]),
+    );
+    await a1.api.post('/zone-requests', { zoneId: plateau.id }).expect(201);
+    await a1.api.post('/days/start').expect(200);
+    const [{ dayId }] = await owner.query<{ dayId: string }[]>(
+      `SELECT id AS "dayId" FROM work_days WHERE agent_id = $1 ORDER BY started_at DESC LIMIT 1`,
+      [a1.id],
+    );
+    await owner.query(
+      `INSERT INTO zone_exits (tenant_id, day_id, agent_id, zone_id, exited_at) VALUES ($1, $2, $3, $4, now())`,
+      [t.tenantId, dayId, a1.id, plateau.id],
+    );
+    const sale = (extra: object) =>
+      a1.api.post('/van-sales/sales', {
+        clientId: randomUUID(),
+        outletId: maquis.id,
+        lines: [{ productId: C, quantity: 2 }],
+        paidAmount: 600,
+        paymentMethod: 'cash',
+        ...extra,
+      });
+    await sale(COCODY_POINT).expect(404);
+    await sale({ outOfZoneReason: 'Rupture urgente', ...IN_PLATEAU })
+      .expect(409)
+      .expect((r) => expect(r.body.code).toBe('VISIT_TOO_FAR'));
+    const ok = (
+      await sale({
+        outOfZoneReason: 'Rupture urgente du client',
+        ...COCODY_POINT,
+      }).expect(201)
+    ).body as Body;
+    expect(ok.flags).toContain('out_of_zone');
+    expect(ok.outOfZoneReason).toBe('Rupture urgente du client');
+    expect(ok.agentId).toBe(a1.id);
+    const notified = await owner.query<{ userId: string }[]>(
+      `SELECT user_id AS "userId" FROM notifications WHERE type = 'sale.out_of_zone' AND tenant_id = $1`,
+      [t.tenantId],
+    );
+    expect(notified.map((n) => n.userId).sort()).toEqual(
+      [leadA.id, leadB.id].sort(),
+    );
+    const [exit] = await owner.query<{ justification: string }[]>(
+      `SELECT justification FROM zone_exits WHERE agent_id = $1 AND ended_at IS NULL`,
+      [a1.id],
+    );
+    expect(exit.justification).toBe(
+      'Vente hors zone chez Maquis Cocody : Rupture urgente du client',
+    );
+  }, 90_000);
 });

@@ -78,6 +78,8 @@ export interface ZoneExitInfo {
   maxDistanceM: number;
   /** Le chef a été prévenu (sortie plus longue que le délai d'alerte) */
   alertedAt: string | null;
+  /** Sortie justifiée (vente d'urgence chez un client hors zone…) */
+  justification?: string | null;
 }
 
 /** Alertes intelligentes des responsables. */

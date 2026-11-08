@@ -304,6 +304,23 @@ export class CreateSaleDto {
   @IsOptional()
   @IsDateString()
   soldAt?: string;
+
+  /** Précision de la position, en mètres */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  accuracy?: number;
+
+  /**
+   * Client hors des zones de l'agent (urgence) : motif obligatoire ; l'agent doit être sur
+   * place. La vente est marquée « hors zone » et les chefs sont prévenus.
+   */
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(300)
+  @Transform(trim)
+  outOfZoneReason?: string;
 }
 
 /** Paiement reçu d'un client : il règle ses commandes dues, les plus anciennes d'abord. */
@@ -366,4 +383,90 @@ export class RemittanceDto {
   @MaxLength(500)
   @Transform(trim)
   note?: string;
+}
+
+// ------------------------------------------------------------ dépannage entre camions
+
+/** Demande de dépannage : ce qu'il faut à l'agent en rupture (diffusée aux collègues proches). */
+export class CreateTransferDto {
+  @IsUUID()
+  clientId: string;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(50)
+  @ValidateNested({ each: true })
+  @Type(() => StockLineDto)
+  lines: StockLineDto[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  @Transform(trim)
+  note?: string;
+}
+
+/** Part prise par un collègue : ce qu'il peut donner (au plus ce qui reste à trouver). */
+export class AcceptTransferDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(50)
+  @ValidateNested({ each: true })
+  @Type(() => StockLineDto)
+  lines: StockLineDto[];
+}
+
+/** Refus du chef, abandon d'une part, clôture : motif facultatif. */
+export class TransferDecisionDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  @Transform(trim)
+  note?: string;
+}
+
+/** Remise sur place : le collègue a scanné le code du demandeur et déclare ce qu'il donne. */
+export class TransferHandoverDto {
+  /** Identifiant généré sur le téléphone du collègue (renvoi sans doublon) */
+  @IsUUID()
+  clientId: string;
+
+  /** Code lu sur le téléphone du demandeur */
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  token: string;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(50)
+  @ValidateNested({ each: true })
+  @Type(() => StockLineDto)
+  lines: StockLineDto[];
+}
+
+export class TransfersQuery {
+  /** open : en cours ; all : tous (30 derniers jours) */
+  @IsOptional()
+  @IsIn(['open', 'all'])
+  state?: 'open' | 'all';
+}
+
+/** Clients de toute la structure (vente d'urgence hors zone). */
+export class OutletSearchQuery {
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  @Transform(trim)
+  q?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsLatitude()
+  lat?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsLongitude()
+  lng?: number;
 }

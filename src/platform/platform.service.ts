@@ -202,7 +202,20 @@ export class PlatformService {
       `SELECT id FROM users WHERE tenant_id = $1`,
       [tenantId],
     );
-    await m.query(`DELETE FROM tenants WHERE id = $1`, [tenantId]);
+    // Une autre connexion qui tient des lignes de la structure (requête en cours, fenêtre
+    // pgAdmin restée ouverte…) ferait attendre la suppression sans fin : on abandonne après
+    // 15 secondes, avec un message clair (rien n'est supprimé).
+    await m.query(`SET LOCAL lock_timeout = '15s'`);
+    try {
+      await m.query(`DELETE FROM tenants WHERE id = $1`, [tenantId]);
+    } catch (error) {
+      if ((error as { code?: string }).code === '55P03')
+        throw conflict(
+          'TENANT_BUSY',
+          'Suppression impossible pour l’instant : des données de cette structure sont en cours d’utilisation (requête ou fenêtre pgAdmin ouverte). Rien n’a été supprimé ; réessayez dans un instant.',
+        );
+      throw error;
+    }
     // Journal technique des erreurs : la structure n'y est plus citée.
     await m.query(
       `UPDATE platform_errors

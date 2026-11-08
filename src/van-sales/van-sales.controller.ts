@@ -28,6 +28,7 @@ import {
   LoadDto,
   LossDto,
   MovementsQuery,
+  OutletSearchQuery,
   ReceiptDto,
   RemittanceDto,
   UnloadDto,
@@ -163,6 +164,29 @@ export class VanSalesController {
   @Get('me')
   mine(@CurrentUser() user: AuthUser) {
     return this.sales.mine(user);
+  }
+
+  /**
+   * Clients de toute la structure (vente d'urgence hors zone) : par nom ou les plus proches ;
+   * « inScope » dit si le client est déjà dans le périmètre de l'agent.
+   */
+  @Roles(Role.Agent)
+  @Get('outlets/search')
+  searchOutlets(@CurrentUser() user: AuthUser, @Query() q: OutletSearchQuery) {
+    return this.sales.searchOutlets(user, q);
+  }
+
+  /**
+   * Vente d'urgence hors zone : le client choisi (hors du périmètre de l'agent), ses prix et
+   * son crédit, pour préparer la vente dans l'app.
+   */
+  @Roles(Role.Agent)
+  @Get('outlets/:id/out-of-zone')
+  outOfZone(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.sales.outOfZoneContext(user, id);
   }
 
   /** Vente directe : prix, stock et crédit vérifiés par le serveur. Idempotente (clientId). */

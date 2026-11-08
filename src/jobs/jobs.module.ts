@@ -5,6 +5,7 @@ import { DaysModule } from '../days/days.module';
 import { MissionsModule } from '../missions/missions.module';
 import { PositionsModule } from '../positions/positions.module';
 import { ReportsModule } from '../reports/reports.module';
+import { VanSalesModule } from '../van-sales/van-sales.module';
 import { ZoneRequestsModule } from '../zone-requests/zone-requests.module';
 import { JobsService } from './jobs.service';
 
@@ -16,6 +17,7 @@ import { JobsService } from './jobs.service';
     PayrollModule,
     PositionsModule,
     ReportsModule,
+    VanSalesModule,
     ZoneRequestsModule,
   ],
   providers: [JobsService],
