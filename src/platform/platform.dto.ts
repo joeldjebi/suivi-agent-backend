@@ -648,3 +648,30 @@ export class ResolveErrorDto {
   @IsBoolean()
   resolved?: boolean;
 }
+
+export class OnboardingRequestsQuery {
+  /** pending (par défaut) : à traiter ; all : toutes, les plus récentes d'abord */
+  @IsOptional()
+  @IsIn(['pending', 'all'])
+  status?: 'pending' | 'all';
+}
+
+/** Acceptation d'une demande de mise en place : prix du forfait, sauf montant indiqué. */
+export class AcceptOnboardingDto {
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  amount?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  note?: string;
+}
+
+export class RejectOnboardingDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(300)
+  reason: string;
+}

@@ -36,6 +36,7 @@ import { SessionRevocationService } from '../common/session-revocation.service';
 import {
   Invoice,
   OneTimeCharge,
+  OnboardingRequest,
   Plan,
   PlatformAdmin,
   PlatformSettings,
@@ -55,6 +56,8 @@ import {
   ListInvoicesQuery,
   ListTenantsQuery,
   OneTimeChargeDto,
+  OnboardingRequestsQuery,
+  AcceptOnboardingDto,
   MfaDisableDto,
   PlatformLoginDto,
   PlatformMfaLoginDto,
@@ -130,6 +133,10 @@ function omit<T extends object, K extends keyof T>(
 }
 
 /** Espace de l'éditeur : structures, abonnements, factures, catalogue et réglages. */
+/** « 50 000 FCFA » */
+const formatAmount = (n: number, currency: string) =>
+  `${new Intl.NumberFormat('fr-FR').format(n).replace(/\u202f/g, ' ')} ${currency === 'XOF' ? 'FCFA' : currency}`;
+
 @Injectable()
 export class PlatformService {
   private readonly logger = new Logger(PlatformService.name);
@@ -304,6 +311,119 @@ export class PlatformService {
       packageCode: dto.packageCode ?? null,
     });
     return charge;
+  }
+
+  // ------------------------------------------------------- demandes de mise en place
+
+  /** Demandes des structures : à traiter (par défaut) ou toutes, avec le nombre en attente. */
+  async onboardingRequests(query: OnboardingRequestsQuery) {
+    const m = this.db.manager;
+    const items = await m.query<Record<string, unknown>[]>(
+      `SELECT r.id, r.tenant_id AS "tenantId", t.name AS "tenantName", r.package_code AS "packageCode",
+              r.package_name AS "packageName", r.package_price AS "packagePrice", r.message,
+              r.status, r.created_at AS "createdAt", r.decided_at AS "decidedAt",
+              r.decision_note AS "decisionNote", r.amount, r.charge_id AS "chargeId",
+              nullif(trim(coalesce(u.first_name, '') || ' ' || coalesce(u.last_name, '')), '') AS "requestedByName",
+              u.email AS "requestedByEmail", u.phone AS "requestedByPhone"
+       FROM onboarding_requests r
+       JOIN tenants t ON t.id = r.tenant_id
+       LEFT JOIN users u ON u.id = r.requested_by
+       WHERE ($1::text = 'all' OR r.status = 'pending')
+       ORDER BY (r.status = 'pending') DESC, r.created_at DESC
+       LIMIT 100`,
+      [query.status ?? 'pending'],
+    );
+    const [{ pending }] = await m.query<{ pending: number }[]>(
+      `SELECT count(*)::int AS pending FROM onboarding_requests WHERE status = 'pending'`,
+    );
+    return { items, pending };
+  }
+
+  private async pendingRequest(id: string): Promise<OnboardingRequest> {
+    const request = await this.db.manager.findOneBy(OnboardingRequest, { id });
+    if (!request) throw notFound('Demande');
+    if (request.status !== 'pending')
+      throw conflict(
+        'ONBOARDING_REQUEST_DECIDED',
+        request.status === 'cancelled'
+          ? 'La structure a retiré cette demande'
+          : 'Cette demande a déjà reçu une réponse',
+      );
+    return request;
+  }
+
+  /**
+   * Demande acceptée : les frais (prix du forfait demandé, sauf montant indiqué) s'ajoutent à
+   * la prochaine facture de la structure, et ses administrateurs sont prévenus.
+   */
+  async acceptOnboarding(
+    admin: PlatformUser,
+    id: string,
+    dto: AcceptOnboardingDto,
+  ) {
+    const request = await this.pendingRequest(id);
+    const amount = dto.amount ?? request.packagePrice;
+    if (amount <= 0)
+      throw badRequest('INVALID_CHARGE', 'Indiquez le montant à facturer');
+    const m = this.db.manager;
+    const charge = await m.save(OneTimeCharge, {
+      tenantId: request.tenantId,
+      label: `Mise en place : ${request.packageName}`,
+      amount,
+      packageCode: request.packageCode,
+      note: dto.note?.trim() || null,
+      createdBy: admin.id,
+      invoiceId: null,
+    });
+    await m.update(
+      OnboardingRequest,
+      { id },
+      {
+        status: 'accepted',
+        decidedAt: new Date(),
+        decidedBy: admin.id,
+        decisionNote: dto.note?.trim() || null,
+        amount,
+        chargeId: charge.id,
+      },
+    );
+    await this.log(admin, 'tenant.onboarding_accept', request.tenantId, {
+      packageCode: request.packageCode,
+      amount,
+    });
+    const currency = (await this.settings()).currency;
+    this.notifyAdmins(request.tenantId, {
+      type: 'subscription.onboarding_accepted',
+      title: 'Mise en place acceptée',
+      body: `Votre demande « ${request.packageName} » est acceptée : ${formatAmount(amount, currency)} sur votre prochaine facture. Nous vous contactons pour fixer les dates.${dto.note?.trim() ? ` ${dto.note.trim()}` : ''}`,
+    });
+    return m.findOneByOrFail(OnboardingRequest, { id });
+  }
+
+  /** Demande refusée, avec le motif transmis aux administrateurs de la structure. */
+  async rejectOnboarding(admin: PlatformUser, id: string, reason: string) {
+    const request = await this.pendingRequest(id);
+    const m = this.db.manager;
+    await m.update(
+      OnboardingRequest,
+      { id },
+      {
+        status: 'rejected',
+        decidedAt: new Date(),
+        decidedBy: admin.id,
+        decisionNote: reason.trim(),
+      },
+    );
+    await this.log(admin, 'tenant.onboarding_reject', request.tenantId, {
+      packageCode: request.packageCode,
+      reason: reason.trim(),
+    });
+    this.notifyAdmins(request.tenantId, {
+      type: 'subscription.onboarding_rejected',
+      title: 'Mise en place : demande refusée',
+      body: `Votre demande « ${request.packageName} » n’est pas retenue : ${reason.trim()}`,
+    });
+    return m.findOneByOrFail(OnboardingRequest, { id });
   }
 
   /** Frais pas encore facturés : retirés. */
@@ -1037,6 +1157,11 @@ export class PlatformService {
       order: { createdAt: 'DESC' },
       take: 30,
     });
+    const onboardingRequests = await m.find(OnboardingRequest, {
+      where: { tenantId: id },
+      order: { createdAt: 'DESC' },
+      take: 10,
+    });
 
     const admins = await m.query<Record<string, unknown>[]>(
       `SELECT id, first_name AS "firstName", last_name AS "lastName", email, phone, is_active AS "isActive",
@@ -1093,6 +1218,7 @@ export class PlatformService {
       usage,
       estimate,
       charges,
+      onboardingRequests,
       onboardingPackages: platform.onboardingPackages,
       admins,
       counts,

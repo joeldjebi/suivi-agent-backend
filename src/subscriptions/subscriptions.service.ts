@@ -6,24 +6,31 @@ import {
   Feature,
   InvoiceLineKind,
   InvoiceStatus,
+  OnboardingRequestStatus,
   PHOTO_AI_LOT_SIZE,
   PlanCode,
   Role,
   SubscriptionStatus,
 } from '@suivi/shared';
 import type { InvoiceLine } from '@suivi/shared';
-import { BusinessException, conflict } from '../common/business.exception';
+import {
+  BusinessException,
+  conflict,
+  notFound,
+} from '../common/business.exception';
 import { DbService } from '../common/db.service';
 import type { NotificationInput } from '../common/notifications.service';
 import {
   Invoice,
   OneTimeCharge,
+  OnboardingRequest,
   Plan,
   PlatformSettings,
   Subscription,
   TenantSettings,
 } from '../entities';
-import type { ChangePlanDto } from './subscriptions.dto';
+import type { AuthUser } from '../common/auth-user';
+import type { ChangePlanDto, OnboardingRequestDto } from './subscriptions.dto';
 
 const DAY = 86400_000;
 /** Les administrateurs sont prévenus de la fin de l'ancien tarif ce nombre de jours avant. */
@@ -431,6 +438,68 @@ export class SubscriptionsService {
 
   async invoices(): Promise<Invoice[]> {
     return this.db.manager.find(Invoice, { order: { month: 'DESC' } });
+  }
+
+  // ------------------------------------------------------------ mise en place
+
+  /** Demandes de mise en place de la structure courante, les plus récentes d'abord. */
+  onboardingRequests(): Promise<OnboardingRequest[]> {
+    return this.db.manager.find(OnboardingRequest, {
+      where: { tenantId: this.db.tenantId },
+      order: { createdAt: 'DESC' },
+      take: 20,
+    });
+  }
+
+  /**
+   * Demande d'un forfait de mise en place proposé par l'éditeur (nom et prix figés à cet
+   * instant). Une seule demande en attente à la fois.
+   */
+  async requestOnboarding(user: AuthUser, dto: OnboardingRequestDto) {
+    const pkg = (await this.platform()).onboardingPackages.find(
+      (p) => p.code === dto.packageCode,
+    );
+    if (!pkg) throw notFound('Forfait de mise en place');
+    const m = this.db.manager;
+    const pending = await m.findOneBy(OnboardingRequest, {
+      tenantId: this.db.tenantId,
+      status: OnboardingRequestStatus.Pending,
+    });
+    if (pending)
+      throw conflict(
+        'ONBOARDING_REQUEST_PENDING',
+        `Votre demande « ${pending.packageName} » attend déjà une réponse`,
+      );
+    return m.save(OnboardingRequest, {
+      tenantId: this.db.tenantId,
+      packageCode: pkg.code,
+      packageName: pkg.name,
+      packagePrice: pkg.price,
+      message: dto.message?.trim() || null,
+      status: OnboardingRequestStatus.Pending,
+      requestedBy: user.id,
+    });
+  }
+
+  /** La structure retire sa demande tant que l'éditeur n'a pas répondu. */
+  async cancelOnboarding(id: string) {
+    const m = this.db.manager;
+    const request = await m.findOneBy(OnboardingRequest, {
+      id,
+      tenantId: this.db.tenantId,
+    });
+    if (!request) throw notFound('Demande');
+    if (request.status !== OnboardingRequestStatus.Pending)
+      throw conflict(
+        'ONBOARDING_REQUEST_DECIDED',
+        'L’éditeur a déjà répondu à cette demande',
+      );
+    await m.update(
+      OnboardingRequest,
+      { id },
+      { status: OnboardingRequestStatus.Cancelled, decidedAt: new Date() },
+    );
+    return m.findOneByOrFail(OnboardingRequest, { id });
   }
 
   /**

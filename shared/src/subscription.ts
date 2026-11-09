@@ -64,6 +64,25 @@ export interface InvoiceLine {
 /** Photos IA facturées par lots de cette taille au-delà du quota du mois. */
 export const PHOTO_AI_LOT_SIZE = 100;
 
+/** Demande de mise en place faite par une structure, décidée par l'éditeur. */
+export const OnboardingRequestStatus = {
+  Pending: 'pending',
+  /** Acceptée : frais ajoutés à la prochaine facture */
+  Accepted: 'accepted',
+  Rejected: 'rejected',
+  /** Retirée par la structure avant la décision */
+  Cancelled: 'cancelled',
+} as const;
+export type OnboardingRequestStatus =
+  (typeof OnboardingRequestStatus)[keyof typeof OnboardingRequestStatus];
+
+export const ONBOARDING_REQUEST_STATUS_LABELS: Record<OnboardingRequestStatus, string> = {
+  pending: 'En attente',
+  accepted: 'Acceptée',
+  rejected: 'Refusée',
+  cancelled: 'Annulée',
+};
+
 /** Forfait de mise en place proposé par l'éditeur (formation, import, configuration). */
 export interface OnboardingPackage {
   code: string;

@@ -31,6 +31,9 @@ import {
   PlatformLoginDto,
   PlatformPasswordDto,
   OneTimeChargeDto,
+  OnboardingRequestsQuery,
+  AcceptOnboardingDto,
+  RejectOnboardingDto,
   PhotoAiBonusDto,
   PlatformSubscriptionDto,
   RecordPaymentDto,
@@ -239,6 +242,33 @@ export class PlatformController {
   @Get('tenants/:id/config')
   tenantConfig(@Param('id', ParseUUIDPipe) id: string) {
     return this.tenantData.config(id);
+  }
+
+  /** Demandes de mise en place des structures (à traiter par défaut), et le nombre en attente. */
+  @Get('onboarding-requests')
+  onboardingRequests(@Query() query: OnboardingRequestsQuery) {
+    return this.platform.onboardingRequests(query);
+  }
+
+  /** Accepter : les frais s'ajoutent à la prochaine facture de la structure. */
+  @Post('onboarding-requests/:id/accept')
+  @HttpCode(200)
+  acceptOnboarding(
+    @CurrentAdmin() admin: PlatformUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AcceptOnboardingDto,
+  ) {
+    return this.platform.acceptOnboarding(admin, id, dto);
+  }
+
+  @Post('onboarding-requests/:id/reject')
+  @HttpCode(200)
+  rejectOnboarding(
+    @CurrentAdmin() admin: PlatformUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RejectOnboardingDto,
+  ) {
+    return this.platform.rejectOnboarding(admin, id, dto.reason);
   }
 
   /** Frais ponctuels (mise en place) ajoutés à la prochaine facture. */

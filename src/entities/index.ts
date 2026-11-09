@@ -18,6 +18,7 @@ import { RefreshToken } from './refresh-token.entity';
 import {
   Invoice,
   OneTimeCharge,
+  OnboardingRequest,
   Plan,
   PlatformSettings,
   Subscription,
@@ -48,6 +49,7 @@ export {
   PaySettings,
   Invoice,
   OneTimeCharge,
+  OnboardingRequest,
   Plan,
   PlatformSettings,
   Subscription,
@@ -83,6 +85,7 @@ export const ENTITIES = [
   PaySettings,
   Invoice,
   OneTimeCharge,
+  OnboardingRequest,
   Plan,
   PlatformSettings,
   Subscription,

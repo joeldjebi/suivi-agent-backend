@@ -1,6 +1,16 @@
 import { BillingCycle, PLAN_CODE_PATTERN, type PlanCode } from '@suivi/shared';
 import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, Matches, Max, Min } from 'class-validator';
+import {
+  IsIn,
+  IsInt,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Matches,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 export class ChangePlanDto {
   @IsOptional()
@@ -19,4 +29,17 @@ export class ChangePlanDto {
   @Min(0)
   @Max(1000)
   extraAgents?: number;
+}
+
+/** Demande de mise en place : un forfait proposé par l'éditeur, et un message facultatif. */
+export class OnboardingRequestDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(30)
+  packageCode: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  message?: string;
 }

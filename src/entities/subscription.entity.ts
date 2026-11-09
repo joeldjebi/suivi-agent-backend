@@ -5,6 +5,7 @@ import type {
   InvoiceLine,
   InvoiceStatus,
   OnboardingPackage,
+  OnboardingRequestStatus,
   PlanCode,
   SubscriptionStatus,
 } from '@suivi/shared';
@@ -345,4 +346,55 @@ export class OneTimeCharge {
   /** Facture qui les porte (null : pas encore facturés) */
   @Column({ name: 'invoice_id', type: 'uuid', nullable: true })
   invoiceId: string | null;
+}
+
+/** Demande de mise en place faite par une structure, décidée par l'éditeur. */
+@Entity('onboarding_requests')
+export class OnboardingRequest {
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
+
+  @Column({ name: 'tenant_id', type: 'uuid' })
+  tenantId: string;
+
+  /** Forfait demandé, avec son nom et son prix au moment de la demande */
+  @Column({ name: 'package_code', type: 'text' })
+  packageCode: string;
+
+  @Column({ name: 'package_name', type: 'text' })
+  packageName: string;
+
+  @Column({ name: 'package_price', type: 'integer' })
+  packagePrice: number;
+
+  @Column({ type: 'text', nullable: true })
+  message: string | null;
+
+  @Column({ type: 'text' })
+  status: OnboardingRequestStatus;
+
+  @Column({ name: 'requested_by', type: 'uuid', nullable: true })
+  requestedBy: string | null;
+
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
+  createdAt: Date;
+
+  @Column({ name: 'decided_at', type: 'timestamptz', nullable: true })
+  decidedAt: Date | null;
+
+  /** Compte de l'éditeur qui a décidé */
+  @Column({ name: 'decided_by', type: 'text', nullable: true })
+  decidedBy: string | null;
+
+  /** Motif du refus, ou note à l'acceptation */
+  @Column({ name: 'decision_note', type: 'text', nullable: true })
+  decisionNote: string | null;
+
+  /** Montant facturé (acceptée) */
+  @Column({ type: 'integer', nullable: true })
+  amount: number | null;
+
+  /** Frais ajoutés à la prochaine facture (acceptée) */
+  @Column({ name: 'charge_id', type: 'uuid', nullable: true })
+  chargeId: string | null;
 }

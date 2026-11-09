@@ -6525,6 +6525,152 @@ describe('Grille tarifaire', () => {
       .expect(400);
   });
 
+  it('demande de mise en place : la structure demande, l’éditeur accepte (frais facturés) ou refuse', async () => {
+    const sa = await editor('sa-mise-en-place');
+    const t = await newTenant(app, 'Atelier Mise en place');
+    const agent = await t.createUser('agent');
+    const admin = t.admin.api;
+    const requests = async () =>
+      (await admin.get('/subscription/onboarding-requests').expect(200))
+        .body as Body[];
+    expect(await requests()).toEqual([]);
+
+    // Demande : forfait proposé, une seule en attente, réservée à l'administrateur.
+    await admin
+      .post('/subscription/onboarding-requests', { packageCode: 'inconnu' })
+      .expect(404);
+    await agent.api
+      .post('/subscription/onboarding-requests', { packageCode: 'start' })
+      .expect(403);
+    const first = (
+      await admin
+        .post('/subscription/onboarding-requests', {
+          packageCode: 'start',
+          message: '  Formation la semaine du 20  ',
+        })
+        .expect(201)
+    ).body as Body;
+    expect(first).toMatchObject({
+      packageName: 'Démarrage',
+      packagePrice: 50000,
+      message: 'Formation la semaine du 20',
+      status: 'pending',
+    });
+    await admin
+      .post('/subscription/onboarding-requests', { packageCode: 'assisted' })
+      .expect(409)
+      .expect((r) => expect(r.body.code).toBe('ONBOARDING_REQUEST_PENDING'));
+
+    // Retirée avant la réponse, puis une autre demande.
+    await admin
+      .post(`/subscription/onboarding-requests/${first.id as string}/cancel`)
+      .expect(200)
+      .expect((r) => expect(r.body.status).toBe('cancelled'));
+    await admin
+      .post(`/subscription/onboarding-requests/${first.id as string}/cancel`)
+      .expect(409);
+    const assisted = (
+      await admin
+        .post('/subscription/onboarding-requests', { packageCode: 'assisted' })
+        .expect(201)
+    ).body as Body;
+
+    // L'éditeur la voit dans les demandes à traiter, avec la structure et le demandeur.
+    const list = (await sa.get('/platform/onboarding-requests').expect(200))
+      .body as Body;
+    expect(list.pending).toBeGreaterThanOrEqual(1);
+    expect(
+      (list.items as Body[]).find((r) => r.id === assisted.id),
+    ).toMatchObject({
+      tenantName: 'Atelier Mise en place',
+      packageName: 'Accompagné',
+      packagePrice: 250000,
+      status: 'pending',
+      requestedByEmail: t.admin.email,
+    });
+    await sa
+      .post(`/platform/onboarding-requests/${first.id as string}/accept`, {})
+      .expect(409);
+
+    // Acceptée à un prix négocié : les frais s'ajoutent à la prochaine facture.
+    const accepted = (
+      await sa
+        .post(`/platform/onboarding-requests/${assisted.id as string}/accept`, {
+          amount: 200000,
+          note: 'Remise de lancement.',
+        })
+        .expect(200)
+    ).body as Body;
+    expect(accepted).toMatchObject({ status: 'accepted', amount: 200000 });
+    await sa
+      .post(`/platform/onboarding-requests/${assisted.id as string}/accept`, {})
+      .expect(409);
+    const detail = (await sa.get(`/platform/tenants/${t.tenantId}`).expect(200))
+      .body as Body;
+    expect(detail.charges).toEqual([
+      expect.objectContaining({
+        id: accepted.chargeId,
+        label: 'Mise en place : Accompagné',
+        amount: 200000,
+        invoiceId: null,
+      }),
+    ]);
+    expect(detail.onboardingRequests[0]).toMatchObject({
+      id: assisted.id,
+      status: 'accepted',
+    });
+    const sub = (await admin.get('/subscription').expect(200)).body as Body;
+    expect(sub.estimate.lines).toContainEqual(
+      expect.objectContaining({
+        kind: 'one_time',
+        label: 'Mise en place : Accompagné',
+        amount: 200000,
+      }),
+    );
+
+    // Refusée avec un motif.
+    const other = (
+      await admin
+        .post('/subscription/onboarding-requests', { packageCode: 'start' })
+        .expect(201)
+    ).body as Body;
+    await sa
+      .post(`/platform/onboarding-requests/${other.id as string}/reject`, {})
+      .expect(400);
+    await sa
+      .post(`/platform/onboarding-requests/${other.id as string}/reject`, {
+        reason: 'Déjà compris dans l’accompagnement',
+      })
+      .expect(200)
+      .expect((r) => expect(r.body.status).toBe('rejected'));
+    await admin
+      .post(`/subscription/onboarding-requests/${other.id as string}/cancel`)
+      .expect(409);
+    expect((await requests()).map((r) => r.status)).toEqual([
+      'rejected',
+      'accepted',
+      'cancelled',
+    ]);
+
+    // L'administrateur est prévenu de chaque réponse.
+    await new Promise((r) => setTimeout(r, 300));
+    const notes = (
+      (await admin.get('/notifications').expect(200)).body as Body[]
+    ).filter((n) => String(n.type).startsWith('subscription.onboarding'));
+    expect(notes.map((n) => [n.type, n.body])).toEqual(
+      expect.arrayContaining([
+        [
+          'subscription.onboarding_accepted',
+          expect.stringContaining('200 000 FCFA sur votre prochaine facture'),
+        ],
+        [
+          'subscription.onboarding_rejected',
+          expect.stringContaining('Déjà compris dans l’accompagnement'),
+        ],
+      ]),
+    );
+  });
+
   it('clients actuels : ancien tarif garanti, rappel un mois avant, levé au changement de formule', async () => {
     const sa = await editor('sa-ancien');
     const t = await newTenant(app);
