@@ -27,12 +27,14 @@ import type { OutletView } from '../outlets/outlets.service';
 import { assertPresence } from '../outlets/visit-rules';
 import { receiptPdf } from './receipt';
 import { StockService } from './stock.service';
+import { TransfersService } from './transfers.service';
 import type {
   CashQuery,
   CreatePaymentDto,
   CreateSaleDto,
   OutletSearchQuery,
   RemittanceDto,
+  VanHistoryQuery,
 } from './van-sales.dto';
 
 /**
@@ -58,6 +60,7 @@ export class VanSalesService {
     private readonly payments: PaymentsService,
     private readonly outlets: OutletsService,
     private readonly stock: StockService,
+    private readonly transfers: TransfersService,
   ) {}
 
   private tx<T>(fn: (m: EntityManager) => Promise<T>): Promise<T> {
@@ -489,6 +492,49 @@ export class VanSalesService {
       methodLabel: PAYMENT_METHOD_LABELS[row.method as 'cash'],
       balance: await this.payments.balance(row.outletId as string),
     };
+  }
+
+  /**
+   * Historique du camion (agent) : ventes, approvisionnements, dépannages, casse ou perte,
+   * retours au dépôt. Liste paginée et totaux de la période, selon l'onglet.
+   */
+  async history(user: AuthUser, q: VanHistoryQuery) {
+    const { type, from, to, productId, page, limit } = q;
+    if (type === 'sales')
+      return this.orders.agentSales(user.id, {
+        from,
+        to,
+        productId,
+        outletId: q.outletId,
+        payment: q.payment,
+        page,
+        limit,
+      });
+    if (type === 'transfers')
+      return this.transfers.history(user, {
+        from,
+        to,
+        productId,
+        status:
+          q.status === 'open' || q.status === 'finished' ? q.status : undefined,
+        direction: q.direction,
+        page,
+        limit,
+      });
+    const kind = {
+      loads: StockMovementKind.Load,
+      losses: StockMovementKind.Loss,
+      unloads: StockMovementKind.Unload,
+    }[type];
+    const status = ['pending', 'done', 'cancelled'].includes(q.status ?? '')
+      ? q.status
+      : undefined;
+    const filter = { kind, from, to, productId, status };
+    const [list, summary] = await Promise.all([
+      this.stock.movements(user, { ...filter, page, limit }),
+      this.stock.movementTotals(user, filter),
+    ]);
+    return { ...list, summary };
   }
 
   /** Quantités sorties du camion aujourd'hui (heure de la structure), par produit. */

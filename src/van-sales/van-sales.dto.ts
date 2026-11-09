@@ -445,6 +445,60 @@ export class TransferHandoverDto {
   lines: StockLineDto[];
 }
 
+/** Onglets de l'historique du camion (agent). */
+export const VAN_HISTORY_TYPES = [
+  'sales',
+  'loads',
+  'transfers',
+  'losses',
+  'unloads',
+] as const;
+export type VanHistoryType = (typeof VAN_HISTORY_TYPES)[number];
+
+/**
+ * Historique du camion de l'agent : un onglet (type), la période (dates incluses, heure de la
+ * structure) et les filtres propres à l'onglet. Chaque réponse porte les totaux de la période.
+ */
+export class VanHistoryQuery extends PaginationQuery {
+  @IsIn(VAN_HISTORY_TYPES)
+  type: VanHistoryType;
+
+  @IsOptional()
+  @IsDateString()
+  from?: string;
+
+  @IsOptional()
+  @IsDateString()
+  to?: string;
+
+  @IsOptional()
+  @IsUUID()
+  productId?: string;
+
+  /** Ventes : un client */
+  @IsOptional()
+  @IsUUID()
+  outletId?: string;
+
+  /** Ventes : payées en entier, avec un reste à crédit, ou annulées */
+  @IsOptional()
+  @IsIn(['paid', 'credit', 'cancelled'])
+  payment?: 'paid' | 'credit' | 'cancelled';
+
+  /**
+   * Approvisionnements et retours : pending (à confirmer), done, cancelled ;
+   * dépannages : open (en cours) ou finished (terminés, clos, expirés).
+   */
+  @IsOptional()
+  @IsIn(['pending', 'done', 'cancelled', 'open', 'finished'])
+  status?: string;
+
+  /** Dépannages : reçus (mes demandes) ou donnés (mes parts chez les collègues) */
+  @IsOptional()
+  @IsIn(['received', 'given'])
+  direction?: 'received' | 'given';
+}
+
 export class TransfersQuery {
   /** open : en cours ; all : tous (30 derniers jours) */
   @IsOptional()

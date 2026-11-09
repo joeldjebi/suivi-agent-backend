@@ -11912,6 +11912,325 @@ describe('Suppression définitive d’une structure', () => {
   }, 60_000);
 });
 
+describe('Historique du camion', () => {
+  it('ventes, approvisionnements, dépannages, casse, retours : filtres et totaux de la période', async () => {
+    const t = await newTenant(app);
+    await t.createZone('Plateau', PLATEAU);
+    const agent = await t.createUser('agent');
+    const mate = await t.createUser('agent');
+    const admin = t.admin.api;
+    const product = async (name: string) =>
+      (
+        await admin
+          .post('/products', {
+            name,
+            own: true,
+            format: '33 cl',
+            unit: 'Bouteille',
+          })
+          .expect(201)
+      ).body as Body;
+    const coca = await product('Coca-Cola');
+    const fanta = await product('Fanta');
+    const C = coca.id as string;
+    const F = fanta.id as string;
+    const list = (
+      await admin
+        .post('/orders/price-lists', { name: 'Détaillant' })
+        .expect(201)
+    ).body as Body;
+    await admin
+      .put('/orders/prices', {
+        items: [
+          { priceListId: list.id, productId: C, price: 300 },
+          { priceListId: list.id, productId: F, price: 250 },
+        ],
+      })
+      .expect(200);
+    const outlet = async (name: string) =>
+      (
+        await agent.api
+          .post('/outlets', {
+            name,
+            lat: IN_PLATEAU.lat,
+            lng: IN_PLATEAU.lng,
+            accuracy: 5,
+            force: true,
+          })
+          .expect(201)
+      ).body as Body;
+    const awa = await outlet('Boutique Awa');
+    const koffi = await outlet('Chez Koffi');
+    await admin
+      .put(`/van-sales/outlets/${koffi.id}/credit-limit`, { limit: 10000 })
+      .expect(200);
+    const depot = (
+      await admin
+        .post('/stock/locations', { kind: 'depot', name: 'Dépôt' })
+        .expect(201)
+    ).body as Body;
+    await admin
+      .post('/stock/receipts', {
+        depotId: depot.id,
+        lines: [
+          { productId: C, quantity: 200 },
+          { productId: F, quantity: 200 },
+        ],
+      })
+      .expect(201);
+    const vans: Record<string, Body> = {};
+    for (const [name, a] of [
+      ['Camion 1', agent],
+      ['Camion 2', mate],
+    ] as const)
+      vans[a.id] = (
+        await admin
+          .post('/stock/locations', { kind: 'van', name, agentId: a.id })
+          .expect(201)
+      ).body as Body;
+    const load = async (a: typeof agent, lines: Body[]) =>
+      (
+        await admin
+          .post('/stock/loads', {
+            depotId: depot.id,
+            vanId: vans[a.id].id,
+            lines,
+          })
+          .expect(201)
+      ).body as Body;
+    // Deux chargements confirmés (2 Coca cassées à la réception), un encore à confirmer.
+    const l1 = await load(agent, [
+      { productId: C, quantity: 48 },
+      { productId: F, quantity: 24 },
+    ]);
+    await agent.api
+      .post(`/stock/movements/${l1.id as string}/confirm`, {
+        lines: [
+          { productId: C, received: 46 },
+          { productId: F, received: 24 },
+        ],
+        note: 'Deux bouteilles cassées',
+      })
+      .expect(200);
+    const pendingLoad = await load(agent, [{ productId: F, quantity: 12 }]);
+    const l3 = await load(mate, [{ productId: C, quantity: 24 }]);
+    await mate.api
+      .post(`/stock/movements/${l3.id as string}/confirm`, {})
+      .expect(200);
+
+    let n = 0;
+    const uid = () =>
+      `00000000-0000-4000-8000-${String(++n).padStart(12, '0')}`;
+    const sell = (body: Body) =>
+      agent.api
+        .post('/van-sales/sales', {
+          clientId: uid(),
+          lat: IN_PLATEAU.lat,
+          lng: IN_PLATEAU.lng,
+          ...body,
+        })
+        .expect(201);
+    // Aujourd'hui : Awa paie 12 Coca, Koffi prend 6 Fanta dont 1 000 à crédit.
+    await sell({
+      outletId: awa.id,
+      lines: [{ productId: C, quantity: 12 }],
+      paidAmount: 3600,
+      paymentMethod: 'cash',
+    });
+    await sell({
+      outletId: koffi.id,
+      lines: [{ productId: F, quantity: 6 }],
+      paidAmount: 500,
+      paymentMethod: 'cash',
+    });
+    // Il y a 3 jours (vente enregistrée sans réseau) : Awa, 2 Coca payés.
+    const tz = ((await admin.get('/settings').expect(200)).body as Body)
+      .timezone as string;
+    const dayOf = (d: Date) =>
+      new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(d);
+    const threeDaysAgo = new Date(Date.now() - 3 * 86_400_000);
+    await sell({
+      outletId: awa.id,
+      lines: [{ productId: C, quantity: 2 }],
+      paidAmount: 600,
+      paymentMethod: 'cash',
+      soldAt: threeDaysAgo.toISOString(),
+    });
+    const today = dayOf(new Date());
+    const history = async (q: string) =>
+      (await agent.api.get(`/van-sales/history?${q}`).expect(200)).body as Body;
+
+    // Ventes : les plus récentes d'abord, totaux de la période.
+    const all = await history('type=sales');
+    expect(all.total).toBe(3);
+    expect(all.summary).toMatchObject({
+      count: 3,
+      amount: 3600 + 1500 + 600,
+      paid: 3600 + 500 + 600,
+      credit: 1000,
+      cancelled: 0,
+    });
+    const week = await history(`type=sales&from=${today}&to=${today}`);
+    expect((week.items as Body[]).map((s) => s.outletName)).toEqual([
+      'Chez Koffi',
+      'Boutique Awa',
+    ]);
+    expect(week.summary).toMatchObject({ count: 2, amount: 5100 });
+    expect(
+      (await history(`type=sales&to=${dayOf(threeDaysAgo)}`)).summary,
+    ).toMatchObject({ count: 1, amount: 600 });
+    const credit = await history('type=sales&payment=credit');
+    expect(credit.items as Body[]).toHaveLength(1);
+    expect((credit.items as Body[])[0]).toMatchObject({
+      outletName: 'Chez Koffi',
+      due: 1000,
+    });
+    expect(
+      (await history(`type=sales&outletId=${awa.id as string}`)).total,
+    ).toBe(2);
+    expect((await history(`type=sales&productId=${F}`)).total).toBe(1);
+    // Une vente annulée par l'admin reste visible, hors des montants.
+    const sales = (await history('type=sales')).items as Body[];
+    await admin
+      .post(`/van-sales/sales/${sales[0].id as string}/cancel`, {
+        reason: 'Erreur de client',
+      })
+      .expect(200);
+    expect((await history('type=sales')).summary).toMatchObject({
+      count: 2,
+      amount: 3600 + 600,
+      credit: 0,
+      cancelled: 1,
+    });
+    expect((await history('type=sales&payment=cancelled')).total).toBe(1);
+
+    // Approvisionnements : le reçu compte, pas l'annoncé ; à confirmer à part.
+    const loads = await history('type=loads');
+    expect(loads.total).toBe(2);
+    expect(loads.summary).toMatchObject({
+      count: 2,
+      products: [
+        { productId: C, quantity: 46 },
+        { productId: F, quantity: 36 },
+      ],
+    });
+    const toConfirm = await history('type=loads&status=pending');
+    expect((toConfirm.items as Body[]).map((m) => m.id)).toEqual([
+      pendingLoad.id,
+    ]);
+    expect(
+      ((await history(`type=loads&productId=${C}`)).summary as Body).products,
+    ).toEqual([expect.objectContaining({ productId: C, quantity: 46 })]);
+
+    // Casse ou perte, retour au dépôt.
+    await agent.api
+      .post('/stock/losses', {
+        clientId: uid(),
+        lines: [{ productId: F, quantity: 2 }],
+        note: 'Casier tombé',
+      })
+      .expect(201);
+    const unload = (
+      await agent.api
+        .post('/stock/unloads', {
+          clientId: uid(),
+          depotId: depot.id,
+          lines: [{ productId: C, quantity: 10 }],
+        })
+        .expect(201)
+    ).body as Body;
+    const losses = await history('type=losses');
+    expect(losses.items as Body[]).toEqual([
+      expect.objectContaining({ kind: 'loss', note: 'Casier tombé' }),
+    ]);
+    expect((losses.summary as Body).products).toEqual([
+      expect.objectContaining({ productId: F, quantity: 2 }),
+    ]);
+    expect((await history('type=unloads&status=pending')).total).toBe(1);
+    await admin
+      .post(`/stock/movements/${unload.id as string}/confirm`, {})
+      .expect(200);
+    expect((await history('type=unloads&status=pending')).total).toBe(0);
+    expect((await history('type=unloads&status=done')).summary).toMatchObject({
+      count: 1,
+      products: [{ productId: C, quantity: 10 }],
+    });
+    // Le collègue ne voit pas mes mouvements dans son historique.
+    expect(
+      (
+        (await mate.api.get('/van-sales/history?type=losses').expect(200))
+          .body as Body
+      ).total,
+    ).toBe(0);
+
+    // Dépannages : je demande 6 Coca, mon collègue en donne 4 ; puis je l'aide à mon tour.
+    const ask = (a: typeof agent, lines: Body[]) =>
+      a.api
+        .post('/van-sales/transfers', { clientId: randomUUID(), lines })
+        .expect(201)
+        .then((r) => r.body as Body);
+    const give = async (giver: typeof agent, req: Body, lines: Body[]) => {
+      await giver.api
+        .post(`/van-sales/transfers/${req.id as string}/accept`, { lines })
+        .expect(200);
+      await giver.api
+        .post('/van-sales/transfers/handover', {
+          clientId: randomUUID(),
+          token: req.token,
+          lines,
+        })
+        .expect(201);
+    };
+    const mine = await ask(agent, [{ productId: C, quantity: 6 }]);
+    await give(mate, mine, [{ productId: C, quantity: 4 }]);
+    const theirs = await ask(mate, [{ productId: F, quantity: 3 }]);
+    await give(agent, theirs, [{ productId: F, quantity: 3 }]);
+    await ask(mate, [{ productId: F, quantity: 1 }]); // pas aidé : hors de mon historique
+
+    const transfers = await history('type=transfers');
+    expect((transfers.items as Body[]).map((x) => [x.id, x.direction])).toEqual(
+      [
+        [theirs.id, 'given'],
+        [mine.id, 'received'],
+      ],
+    );
+    expect(transfers.summary).toMatchObject({
+      requested: 1,
+      helped: 1,
+      products: [
+        { productId: C, received: 4, given: 0 },
+        { productId: F, received: 0, given: 3 },
+      ],
+    });
+    const received = await history('type=transfers&direction=received');
+    expect((received.items as Body[]).map((x) => x.id)).toEqual([mine.id]);
+    expect(received.summary).toMatchObject({
+      requested: 1,
+      helped: 0,
+      products: [{ productId: C, received: 4, given: 0 }],
+    });
+    // Ma demande n'est couverte qu'à moitié : encore en cours.
+    expect(
+      ((await history('type=transfers&status=open')).items as Body[]).map(
+        (x) => x.id,
+      ),
+    ).toEqual([mine.id]);
+    expect(
+      ((await history(`type=transfers&productId=${F}`)).items as Body[]).map(
+        (x) => x.id,
+      ),
+    ).toEqual([theirs.id]);
+    expect(
+      (await history('type=transfers&from=2020-01-01&to=2020-01-31')).total,
+    ).toBe(0);
+
+    // Réservé à l'agent ; type obligatoire.
+    await admin.get('/van-sales/history?type=sales').expect(403);
+    await agent.api.get('/van-sales/history').expect(400);
+    await agent.api.get('/van-sales/history?type=orders').expect(400);
+  });
+});
+
 describe('Dépannage entre camions et vente hors zone', () => {
   it('dépannage partagé : diffusion, parts, accord du chef, code scanné, délais ; vente hors zone', async () => {
     const t = await newTenant(app);

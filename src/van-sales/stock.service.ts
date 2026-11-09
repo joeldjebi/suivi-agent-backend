@@ -738,6 +738,59 @@ export class StockService {
 
   /** Historique des mouvements, filtrable ; l'agent voit ceux de son camion. */
   async movements(user: AuthUser, q: MovementsQuery) {
+    const f = await this.movementFilter(user, q);
+    if (!f) return { items: [], total: 0, page: q.page, limit: q.limit };
+    const { filter, params, p } = f;
+    const [{ total }] = await this.db.manager.query<{ total: number }[]>(
+      `SELECT count(*)::int AS total FROM stock_movements mv ${filter}`,
+      params,
+    );
+    const rows = await this.db.manager.query<{ id: string }[]>(
+      `SELECT mv.id FROM stock_movements mv ${filter}
+       ORDER BY mv.occurred_at DESC, mv.created_at DESC
+       LIMIT ${p(q.limit)} OFFSET ${p((q.page - 1) * q.limit)}`,
+      params,
+    );
+    const items = await Promise.all(rows.map((r) => this.movement(user, r.id)));
+    return { items, total, page: q.page, limit: q.limit };
+  }
+
+  /**
+   * Totaux des mouvements filtrés, par produit : nombre de mouvements et quantités (la
+   * quantité reçue quand elle a été confirmée). Les annulés ne comptent pas.
+   */
+  async movementTotals(
+    user: AuthUser,
+    q: Omit<MovementsQuery, 'page' | 'limit'>,
+  ) {
+    const f = await this.movementFilter(user, q);
+    if (!f) return { count: 0, products: [] };
+    const { filter, params, p } = f;
+    const live = `${filter ? `${filter} AND` : 'WHERE'} mv.status <> 'cancelled'`;
+    const [{ count }] = await this.db.manager.query<{ count: number }[]>(
+      `SELECT count(*)::int AS count FROM stock_movements mv ${live}`,
+      params,
+    );
+    const product = q.productId ? ` AND l.product_id = ${p(q.productId)}` : '';
+    const products = await this.db.manager.query<Record<string, unknown>[]>(
+      `SELECT l.product_id AS "productId", trim(p.name || ' ' || coalesce(p.format, '')) AS name,
+              p.unit, p.packagings, sum(coalesce(l.received, l.quantity))::float8 AS quantity
+       FROM stock_movements mv
+       JOIN stock_movement_lines l ON l.movement_id = mv.id
+       JOIN products p ON p.id = l.product_id
+       ${live}${product}
+       GROUP BY l.product_id, p.name, p.format, p.unit, p.packagings
+       ORDER BY quantity DESC, name`,
+      params,
+    );
+    return { count, products };
+  }
+
+  /** Conditions communes de la liste des mouvements (null : agent sans camion). */
+  private async movementFilter(
+    user: AuthUser,
+    q: Omit<MovementsQuery, 'page' | 'limit'>,
+  ) {
     const params: unknown[] = [];
     const p = (v: unknown) => {
       params.push(v);
@@ -746,7 +799,7 @@ export class StockService {
     const where: string[] = [];
     if (user.role === Role.Agent) {
       const van = await this.vanOf(user.id);
-      if (!van) return { items: [], total: 0, page: q.page, limit: q.limit };
+      if (!van) return null;
       where.push(
         `(mv.from_location_id = ${p(van.id)} OR mv.to_location_id = $${params.length})`,
       );
@@ -777,17 +830,6 @@ export class StockService {
       if (q.to) where.push(`${day} <= ${p(q.to.slice(0, 10))}::date`);
     }
     const filter = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const [{ total }] = await this.db.manager.query<{ total: number }[]>(
-      `SELECT count(*)::int AS total FROM stock_movements mv ${filter}`,
-      params,
-    );
-    const rows = await this.db.manager.query<{ id: string }[]>(
-      `SELECT mv.id FROM stock_movements mv ${filter}
-       ORDER BY mv.occurred_at DESC, mv.created_at DESC
-       LIMIT ${p(q.limit)} OFFSET ${p((q.page - 1) * q.limit)}`,
-      params,
-    );
-    const items = await Promise.all(rows.map((r) => this.movement(user, r.id)));
-    return { items, total, page: q.page, limit: q.limit };
+    return { filter, params, p };
   }
 }

@@ -522,6 +522,86 @@ export class OrdersService {
     return { items: rows.map(view), total, page: q.page, limit: q.limit };
   }
 
+  /**
+   * Ventes directes d'un agent (historique de son camion), les plus récentes d'abord, avec les
+   * totaux de la période (annulées exclues des montants). Le client peut être hors de son
+   * périmètre (vente hors zone) : seul compte que la vente soit la sienne.
+   */
+  async agentSales(
+    agentId: string,
+    q: {
+      from?: string;
+      to?: string;
+      outletId?: string;
+      productId?: string;
+      payment?: 'paid' | 'credit' | 'cancelled';
+      page: number;
+      limit: number;
+    },
+  ) {
+    const params: unknown[] = [];
+    const p = (v: unknown) => {
+      params.push(v);
+      return `$${params.length}`;
+    };
+    const where = [`o.kind = 'sale'`, `o.agent_id = ${p(agentId)}`];
+    if (q.outletId) where.push(`o.outlet_id = ${p(q.outletId)}`);
+    if (q.productId)
+      where.push(
+        `EXISTS (SELECT 1 FROM order_lines x WHERE x.order_id = o.id AND x.product_id = ${p(q.productId)})`,
+      );
+    if (q.payment)
+      where.push(
+        `o.status = ${p(
+          {
+            paid: OrderStatus.Paid,
+            credit: OrderStatus.Delivered,
+            cancelled: OrderStatus.Cancelled,
+          }[q.payment],
+        )}`,
+      );
+    if (q.from || q.to) {
+      const tz = (await this.access.settings()).timezone;
+      const day = `(o.taken_at AT TIME ZONE ${p(tz)})::date`;
+      if (q.from) where.push(`${day} >= ${p(q.from.slice(0, 10))}::date`);
+      if (q.to) where.push(`${day} <= ${p(q.to.slice(0, 10))}::date`);
+    }
+    const w = where.join(' AND ');
+    const [totals] = await this.db.manager.query<
+      {
+        total: number;
+        count: number;
+        amount: number;
+        paid: number;
+        credit: number;
+        cancelled: number;
+      }[]
+    >(
+      `SELECT count(*)::int AS total,
+              (count(*) FILTER (WHERE o.status <> 'cancelled'))::int AS count,
+              coalesce(sum(o.total) FILTER (WHERE o.status <> 'cancelled'), 0)::float8 AS amount,
+              coalesce(sum(o.paid_amount) FILTER (WHERE o.status <> 'cancelled'), 0)::float8 AS paid,
+              coalesce(sum(o.total - o.paid_amount) FILTER (WHERE o.status = 'delivered'), 0)::float8 AS credit,
+              (count(*) FILTER (WHERE o.status = 'cancelled'))::int AS cancelled
+       ${ORDER_FROM} WHERE ${w}`,
+      params,
+    );
+    const rows = await this.db.manager.query<OrderRow[]>(
+      `SELECT ${ORDER_SELECT} ${ORDER_FROM} WHERE ${w}
+       ORDER BY o.taken_at DESC, o.number DESC
+       LIMIT ${p(q.limit)} OFFSET ${p((q.page - 1) * q.limit)}`,
+      params,
+    );
+    const { total, ...summary } = totals;
+    return {
+      items: rows.map(view),
+      total,
+      page: q.page,
+      limit: q.limit,
+      summary: { ...summary, currency: await this.currency() },
+    };
+  }
+
   /** Chiffres de la période : nombre et montant par statut (hors annulées pour le total). */
   /**
    * Ce que la structure a vendu aux points de vente sur la période, produit par produit :

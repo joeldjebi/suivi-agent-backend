@@ -381,6 +381,132 @@ export class TransfersService {
   }
 
   /**
+   * Historique des dépannages de l'agent : ses demandes (reçus) et celles où il a pris une
+   * part (donnés), filtrés par période (date de la demande), état et produit. Les totaux sont
+   * les quantités réellement remises sur la période, reçues et données, par produit.
+   */
+  async history(
+    user: AuthUser,
+    q: {
+      from?: string;
+      to?: string;
+      productId?: string;
+      status?: string;
+      direction?: 'received' | 'given';
+      page: number;
+      limit: number;
+    },
+  ) {
+    const tz = (await this.access.settings()).timezone;
+    const params: unknown[] = [user.id];
+    const p = (v: unknown) => {
+      params.push(v);
+      return `$${params.length}`;
+    };
+    // Fuseau ajouté aux paramètres seulement s'il sert (une période est demandée).
+    let tzRef: string | undefined;
+    const day = (col: string) =>
+      `(${col} AT TIME ZONE ${(tzRef ??= p(tz))})::date`;
+    const asGiver = `EXISTS (SELECT 1 FROM van_transfer_legs l WHERE l.transfer_id = t.id AND l.giver_id = $1)`;
+    const where = [
+      q.direction === 'received'
+        ? `t.requester_id = $1`
+        : q.direction === 'given'
+          ? asGiver
+          : `(t.requester_id = $1 OR ${asGiver})`,
+    ];
+    if (q.status === 'open') where.push(`t.status = ANY(${p(OPEN)}::text[])`);
+    else if (q.status === 'finished')
+      where.push(`NOT t.status = ANY(${p(OPEN)}::text[])`);
+    if (q.productId)
+      where.push(
+        `t.lines @> jsonb_build_array(jsonb_build_object('productId', ${p(q.productId)}::text))`,
+      );
+    const period = (col: string) =>
+      [
+        q.from ? `${day(col)} >= ${p(q.from.slice(0, 10))}::date` : null,
+        q.to ? `${day(col)} <= ${p(q.to.slice(0, 10))}::date` : null,
+      ].filter((x): x is string => !!x);
+    where.push(...period('t.created_at'));
+    const w = where.join(' AND ');
+    const filterParams = [...params];
+    const [{ total }] = await this.db.manager.query<{ total: number }[]>(
+      `SELECT count(*)::int AS total FROM van_transfers t WHERE ${w}`,
+      params,
+    );
+    const rows = await this.db.manager.query<TransferRow[]>(
+      `SELECT ${T_SELECT} WHERE ${w}
+       ORDER BY t.created_at DESC
+       LIMIT ${p(q.limit)} OFFSET ${p((q.page - 1) * q.limit)}`,
+      params,
+    );
+    const items = await Promise.all(
+      rows.map(async (r) => ({
+        ...(await this.view(user, r)),
+        direction: r.requesterId === user.id ? 'received' : 'given',
+      })),
+    );
+
+    // Quantités remises (code scanné) sur la période : reçues sur mes demandes, données par moi.
+    const sParams: unknown[] = [user.id];
+    const sp = (v: unknown) => {
+      sParams.push(v);
+      return `$${sParams.length}`;
+    };
+    let sTz: string | undefined;
+    const sDay = (col: string) =>
+      `(${col} AT TIME ZONE ${(sTz ??= sp(tz))})::date`;
+    const sWhere = [
+      `mv.kind = 'transfer'`,
+      `mv.status = 'done'`,
+      q.direction === 'received'
+        ? `t.requester_id = $1`
+        : q.direction === 'given'
+          ? `g.giver_id = $1`
+          : `(t.requester_id = $1 OR g.giver_id = $1)`,
+    ];
+    if (q.from)
+      sWhere.push(
+        `${sDay('mv.occurred_at')} >= ${sp(q.from.slice(0, 10))}::date`,
+      );
+    if (q.to)
+      sWhere.push(
+        `${sDay('mv.occurred_at')} <= ${sp(q.to.slice(0, 10))}::date`,
+      );
+    if (q.productId) sWhere.push(`ml.product_id = ${sp(q.productId)}`);
+    const products = await this.db.manager.query<Record<string, unknown>[]>(
+      `SELECT ml.product_id AS "productId", trim(p.name || ' ' || coalesce(p.format, '')) AS name,
+              p.unit, p.packagings,
+              coalesce(sum(ml.quantity) FILTER (WHERE t.requester_id = $1), 0)::float8 AS received,
+              coalesce(sum(ml.quantity) FILTER (WHERE g.giver_id = $1), 0)::float8 AS given
+       FROM van_transfer_legs g
+       JOIN van_transfers t ON t.id = g.transfer_id
+       JOIN stock_movements mv ON mv.id = g.movement_id
+       JOIN stock_movement_lines ml ON ml.movement_id = mv.id
+       JOIN products p ON p.id = ml.product_id
+       WHERE ${sWhere.join(' AND ')}
+       GROUP BY ml.product_id, p.name, p.format, p.unit, p.packagings
+       ORDER BY name`,
+      sParams,
+    );
+    const [counts] = await this.db.manager.query<
+      { requested: number; helped: number }[]
+    >(
+      `SELECT (count(*) FILTER (WHERE t.requester_id = $1))::int AS requested,
+              (count(*) FILTER (WHERE t.requester_id <> $1))::int AS helped
+       FROM van_transfers t WHERE ${w}`,
+      filterParams,
+    );
+    return {
+      items,
+      total,
+      page: q.page,
+      limit: q.limit,
+      summary: { ...counts, products },
+    };
+  }
+
+  /**
    * Demandes de collègues que je peux aider (agent) : encore ouvertes, avec au moins un
    * produit que j'ai ; d'abord dans mon équipe, les autres équipes après l'élargissement.
    */

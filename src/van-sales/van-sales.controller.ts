@@ -33,6 +33,7 @@ import {
   RemittanceDto,
   UnloadDto,
   UpdateLocationDto,
+  VanHistoryQuery,
 } from './van-sales.dto';
 import { VanSalesService } from './van-sales.service';
 
@@ -164,6 +165,16 @@ export class VanSalesController {
   @Get('me')
   mine(@CurrentUser() user: AuthUser) {
     return this.sales.mine(user);
+  }
+
+  /**
+   * Historique de mon camion, par onglet (ventes, approvisionnements, dépannages, casse ou
+   * perte, retours au dépôt), filtré, avec les totaux de la période.
+   */
+  @Roles(Role.Agent)
+  @Get('history')
+  history(@CurrentUser() user: AuthUser, @Query() q: VanHistoryQuery) {
+    return this.sales.history(user, q);
   }
 
   /**
