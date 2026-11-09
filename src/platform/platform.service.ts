@@ -35,6 +35,7 @@ import { normalizePhone } from '../common/phone';
 import { SessionRevocationService } from '../common/session-revocation.service';
 import {
   Invoice,
+  OneTimeCharge,
   Plan,
   PlatformAdmin,
   PlatformSettings,
@@ -42,7 +43,10 @@ import {
   Tenant,
   User,
 } from '../entities';
-import { SubscriptionsService } from '../subscriptions/subscriptions.service';
+import {
+  NO_LEGACY,
+  SubscriptionsService,
+} from '../subscriptions/subscriptions.service';
 import {
   AuditQuery,
   CreatePlanDto,
@@ -50,6 +54,7 @@ import {
   CreateTenantDto,
   ListInvoicesQuery,
   ListTenantsQuery,
+  OneTimeChargeDto,
   MfaDisableDto,
   PlatformLoginDto,
   PlatformMfaLoginDto,
@@ -258,6 +263,66 @@ export class PlatformService {
       note: note ?? null,
     });
     return usage;
+  }
+
+  // ------------------------------------------------------------ frais ponctuels
+
+  /**
+   * Frais de mise en place (forfait ou montant libre) : ajoutés à la prochaine facture
+   * mensuelle de la structure.
+   */
+  async addCharge(
+    admin: PlatformUser,
+    tenantId: string,
+    dto: OneTimeChargeDto,
+  ) {
+    await this.tenantOrFail(tenantId);
+    let label = dto.label?.trim();
+    let amount = dto.amount;
+    if (dto.packageCode) {
+      const pkg = (await this.settings()).onboardingPackages.find(
+        (p) => p.code === dto.packageCode,
+      );
+      if (!pkg) throw notFound('Forfait de mise en place');
+      label = label || `Mise en place : ${pkg.name}`;
+      amount = amount ?? pkg.price;
+    }
+    if (!label || !amount || amount <= 0)
+      throw badRequest('INVALID_CHARGE', 'Indiquez un libellé et un montant');
+    const charge = await this.db.manager.save(OneTimeCharge, {
+      tenantId,
+      label,
+      amount,
+      packageCode: dto.packageCode ?? null,
+      note: dto.note?.trim() || null,
+      createdBy: admin.id,
+      invoiceId: null,
+    });
+    await this.log(admin, 'tenant.charge_add', tenantId, {
+      label,
+      amount,
+      packageCode: dto.packageCode ?? null,
+    });
+    return charge;
+  }
+
+  /** Frais pas encore facturés : retirés. */
+  async removeCharge(admin: PlatformUser, tenantId: string, chargeId: string) {
+    const charge = await this.db.manager.findOneBy(OneTimeCharge, {
+      id: chargeId,
+      tenantId,
+    });
+    if (!charge) throw notFound('Frais');
+    if (charge.invoiceId)
+      throw conflict(
+        'CHARGE_INVOICED',
+        'Ces frais sont déjà sur une facture : annulez la facture si besoin',
+      );
+    await this.db.manager.delete(OneTimeCharge, { id: chargeId });
+    await this.log(admin, 'tenant.charge_remove', tenantId, {
+      label: charge.label,
+      amount: charge.amount,
+    });
   }
 
   // ------------------------------------------------------------ journal
@@ -954,15 +1019,24 @@ export class PlatformService {
         )
       : null;
     const now = new Date();
+    // Mois en cours (camions, photos consommés jusqu'ici, frais en attente), lu dans la structure.
     const estimate =
       sub && plan
-        ? this.subscriptions.estimate(
-            sub,
-            plan,
-            platform,
-            new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)),
+        ? await this.db.runAsTenant(id, () =>
+            this.subscriptions.bill(
+              sub,
+              plan,
+              platform,
+              new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)),
+              { until: now },
+            ),
           )
         : null;
+    const charges = await m.find(OneTimeCharge, {
+      where: { tenantId: id },
+      order: { createdAt: 'DESC' },
+      take: 30,
+    });
 
     const admins = await m.query<Record<string, unknown>[]>(
       `SELECT id, first_name AS "firstName", last_name AS "lastName", email, phone, is_active AS "isActive",
@@ -1018,6 +1092,8 @@ export class PlatformService {
       currency: platform.currency,
       usage,
       estimate,
+      charges,
+      onboardingPackages: platform.onboardingPackages,
       admins,
       counts,
       activity,
@@ -1123,6 +1199,24 @@ export class PlatformService {
         dto.billingCycle === BillingCycle.Annual
           ? new Date(Date.now() + 365 * DAY)
           : null;
+    }
+    // Nouvelle formule : la grille en vigueur s'applique, sauf date de fin d'ancien tarif donnée.
+    if (
+      dto.planCode !== undefined &&
+      dto.planCode !== sub.planCode &&
+      dto.legacyUntil === undefined
+    )
+      Object.assign(changes, NO_LEGACY);
+    if (dto.legacyUntil === null) Object.assign(changes, NO_LEGACY);
+    else if (dto.legacyUntil !== undefined) {
+      if (sub.legacyMonthlyPrice === null)
+        throw conflict(
+          'NO_LEGACY_TERMS',
+          'Cette structure n’a pas d’ancien tarif à garantir',
+        );
+      changes.legacyUntil = new Date(dto.legacyUntil);
+      // Nouvelle échéance : le rappel repartira un mois avant.
+      changes.legacyNotifiedAt = null;
     }
     if (dto.trialEndsAt !== undefined) {
       if (sub.status !== SubscriptionStatus.Trialing)
@@ -1365,6 +1459,7 @@ export class PlatformService {
               p.included_agents AS "includedAgents", p.included_leads AS "includedLeads",
               p.extra_agent_price AS "extraAgentPrice", p.sort, p.is_active AS "isActive",
               p.photo_ai_monthly_quota AS "photoAiMonthlyQuota", p.photo_ai_extra_price AS "photoAiExtraPrice",
+              p.van_price AS "vanPrice",
               p.features, p.updated_at AS "updatedAt",
               (SELECT count(*) FROM subscriptions s WHERE s.plan_code = p.code)::int AS tenants,
               (SELECT count(*) FROM subscriptions s
@@ -1401,6 +1496,7 @@ export class PlatformService {
       extraAgentPrice: dto.extraAgentPrice,
       photoAiMonthlyQuota: dto.photoAiMonthlyQuota ?? 0,
       photoAiExtraPrice: dto.photoAiExtraPrice ?? 0,
+      vanPrice: dto.vanPrice ?? 0,
       features: dto.features,
       sort: dto.sort ?? next,
       isActive: dto.isActive ?? true,
@@ -1544,6 +1640,15 @@ export class PlatformService {
           `La formule ${plan.name} n’est plus proposée`,
         );
     }
+    if (
+      dto.onboardingPackages &&
+      new Set(dto.onboardingPackages.map((p) => p.code)).size !==
+        dto.onboardingPackages.length
+    )
+      throw badRequest(
+        'DUPLICATE_PACKAGE_CODE',
+        'Deux forfaits de mise en place ont le même code',
+      );
     if (dto.photoAiProvider && !this.photoAi.isAvailable(dto.photoAiProvider))
       throw conflict(
         'PHOTO_AI_NOT_CONFIGURED',

@@ -30,6 +30,7 @@ import {
   ResolveErrorDto,
   PlatformLoginDto,
   PlatformPasswordDto,
+  OneTimeChargeDto,
   PhotoAiBonusDto,
   PlatformSubscriptionDto,
   RecordPaymentDto,
@@ -238,6 +239,26 @@ export class PlatformController {
   @Get('tenants/:id/config')
   tenantConfig(@Param('id', ParseUUIDPipe) id: string) {
     return this.tenantData.config(id);
+  }
+
+  /** Frais ponctuels (mise en place) ajoutés à la prochaine facture. */
+  @Post('tenants/:id/charges')
+  addCharge(
+    @CurrentAdmin() admin: PlatformUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: OneTimeChargeDto,
+  ) {
+    return this.platform.addCharge(admin, id, dto);
+  }
+
+  @Delete('tenants/:id/charges/:chargeId')
+  @HttpCode(204)
+  removeCharge(
+    @CurrentAdmin() admin: PlatformUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('chargeId', ParseUUIDPipe) chargeId: string,
+  ) {
+    return this.platform.removeCharge(admin, id, chargeId);
   }
 
   /** IA photo : photos accordées en plus du quota ce mois-ci. */

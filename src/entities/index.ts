@@ -17,6 +17,7 @@ import { PlatformAdmin, PlatformAudit } from './platform.entity';
 import { RefreshToken } from './refresh-token.entity';
 import {
   Invoice,
+  OneTimeCharge,
   Plan,
   PlatformSettings,
   Subscription,
@@ -46,6 +47,7 @@ export {
   PayRun,
   PaySettings,
   Invoice,
+  OneTimeCharge,
   Plan,
   PlatformSettings,
   Subscription,
@@ -80,6 +82,7 @@ export const ENTITIES = [
   PayRun,
   PaySettings,
   Invoice,
+  OneTimeCharge,
   Plan,
   PlatformSettings,
   Subscription,

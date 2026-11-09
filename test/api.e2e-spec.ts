@@ -3,6 +3,7 @@ import {
   type ExecutionContext,
   INestApplication,
 } from '@nestjs/common';
+import { Feature } from '@suivi/shared';
 import { lastValueFrom, throwError } from 'rxjs';
 import { MonitoringInterceptor } from '../src/common/monitoring.interceptor';
 import { ErrorLogService } from '../src/error-log/error-log.service';
@@ -6171,7 +6172,7 @@ describe('Abonnement des structures', () => {
     expect(annual.subscription.commitmentEndsAt).not.toBeNull();
     expect(annual.estimate).toMatchObject({
       discountPercent: 15,
-      basePrice: 5000,
+      basePrice: 15000,
     });
     await t.admin.api
       .patch('/subscription', { billingCycle: 'monthly' })
@@ -6234,11 +6235,11 @@ describe('Abonnement des structures', () => {
     expect(invoices[0]).toMatchObject({
       planCode: 'advanced',
       agents: 1,
-      basePrice: 15000,
+      basePrice: 45000,
       extraAgents: 0,
       discountPercent: 15,
       prorataPercent: 100,
-      amount: 12750,
+      amount: 38250,
       currency: 'XOF',
       status: 'pending',
     });
@@ -6269,6 +6270,350 @@ describe('Abonnement des structures', () => {
     await jobs.subscriptions(new Date(due + 18 * 86400_000));
     await agent.api.get('/days/current').expect(200);
     await agent.api.get('/subscription').expect(403);
+  });
+});
+
+describe('Grille tarifaire', () => {
+  // Entreprise avec la vente en camion et l'IA photo, comme en production, le temps de ces tests.
+  let features: string[] = [];
+  beforeAll(async () => {
+    [{ features }] = await owner.query<{ features: string[] }[]>(
+      `SELECT features FROM plans WHERE code = 'enterprise'`,
+    );
+    await owner.query(
+      `UPDATE plans SET features = $1 WHERE code = 'enterprise'`,
+      [Object.values(Feature)],
+    );
+    app.get(SubscriptionsService).invalidateAll();
+  });
+  afterAll(async () => {
+    await owner.query(
+      `UPDATE plans SET features = $1 WHERE code = 'enterprise'`,
+      [features],
+    );
+    app.get(SubscriptionsService).invalidateAll();
+  });
+
+  /** Compte de l'éditeur, connecté. */
+  const editor = async (prefix: string) => {
+    const email = uniqueEmail(prefix);
+    await owner.query(
+      `INSERT INTO platform_admins (email, password_hash, first_name, last_name)
+       VALUES ($1, $2, 'Awa', 'Tarifs')`,
+      [email, await hashPassword('Editeur2026!')],
+    );
+    return new Api(
+      app,
+      (
+        await new Api(app)
+          .post('/platform/auth/login', { email, password: 'Editeur2026!' })
+          .expect(200)
+      ).body.accessToken as string,
+    );
+  };
+  /** Le 2 du mois prochain : la facture du mois en cours est émise. */
+  const nextMonth = () => {
+    const d = new Date();
+    d.setUTCDate(1);
+    d.setUTCMonth(d.getUTCMonth() + 1);
+    d.setUTCDate(2);
+    return d;
+  };
+
+  it('camions actifs, lots de photos IA, mise en place : facture détaillée', async () => {
+    const sa = await editor('sa-grille');
+    // Site public : la grille, les options et les forfaits de mise en place.
+    const pub = (await new Api(app).get('/public/landing').expect(200))
+      .body as Body;
+    expect(
+      (pub.plans as Body[]).map((p) => [p.code, p.name, p.monthlyPrice]),
+    ).toEqual([
+      ['base', 'Essentiel', 15000],
+      ['advanced', 'Pro', 45000],
+      ['enterprise', 'Entreprise', 120000],
+    ]);
+    expect(
+      (pub.plans as Body[]).find((p) => p.code === 'enterprise'),
+    ).toMatchObject({
+      includedAgents: 50,
+      extraAgentPrice: 2000,
+      vanPrice: 3000,
+      photoAiMonthlyQuota: 200,
+      photoAiExtraPrice: 2500,
+    });
+    expect(
+      (pub.onboardingPackages as Body[]).map((p) => [p.code, p.price]),
+    ).toEqual([
+      ['start', 50000],
+      ['assisted', 250000],
+    ]);
+
+    // Structure en essai : un dépôt, trois camions dont deux chargés ce mois-ci.
+    const t = await newTenant(app);
+    const agent = await t.createUser('agent');
+    const admin = t.admin.api;
+    const product = (
+      await admin
+        .post('/products', { name: 'Coca-Cola', own: true, unit: 'Bouteille' })
+        .expect(201)
+    ).body as Body;
+    const depot = (
+      await admin
+        .post('/stock/locations', { kind: 'depot', name: 'Dépôt' })
+        .expect(201)
+    ).body as Body;
+    await admin
+      .post('/stock/receipts', {
+        depotId: depot.id,
+        lines: [{ productId: product.id, quantity: 100 }],
+      })
+      .expect(201);
+    for (const name of ['Camion 1', 'Camion 2', 'Camion 3']) {
+      const van = (
+        await admin.post('/stock/locations', { kind: 'van', name }).expect(201)
+      ).body as Body;
+      if (name !== 'Camion 3')
+        await admin
+          .post('/stock/loads', {
+            depotId: depot.id,
+            vanId: van.id,
+            lines: [{ productId: product.id, quantity: 10 }],
+          })
+          .expect(201);
+    }
+    // 205 photos analysées ce mois-ci : 5 au-delà des 200 comprises.
+    await owner.query(
+      `WITH p AS (
+         INSERT INTO submission_photos (tenant_id, agent_id, client_id, data, mime, size, taken_at, kind)
+         SELECT $1, $2, gen_random_uuid(), '\\x00'::bytea, 'image/jpeg', 1, now(), 'shelf'
+         FROM generate_series(1, 205)
+         RETURNING id)
+       INSERT INTO photo_analyses (tenant_id, photo_id, status, analyzed_at)
+       SELECT $1, id, 'done', now() FROM p`,
+      [t.tenantId, agent.id],
+    );
+
+    // Mise en place : un forfait, des frais libres retirés avant facturation.
+    await sa
+      .post(`/platform/tenants/${t.tenantId}/charges`, { label: 'Formation' })
+      .expect(400);
+    await sa
+      .post(`/platform/tenants/${t.tenantId}/charges`, {
+        packageCode: 'inconnu',
+      })
+      .expect(404);
+    const setup = (
+      await sa
+        .post(`/platform/tenants/${t.tenantId}/charges`, {
+          packageCode: 'start',
+        })
+        .expect(201)
+    ).body as Body;
+    expect(setup).toMatchObject({
+      label: 'Mise en place : Démarrage',
+      amount: 50000,
+      invoiceId: null,
+    });
+    const extra = (
+      await sa
+        .post(`/platform/tenants/${t.tenantId}/charges`, {
+          label: 'Formation complémentaire',
+          amount: 20000,
+        })
+        .expect(201)
+    ).body as Body;
+    await sa
+      .delete(`/platform/tenants/${t.tenantId}/charges/${extra.id as string}`)
+      .expect(204);
+
+    // Fin de l'essai au début du mois : formule Entreprise facturée en entier.
+    await owner.query(
+      `UPDATE subscriptions SET plan_code = 'enterprise', status = 'active',
+              trial_ends_at = date_trunc('month', now()) WHERE tenant_id = $1`,
+      [t.tenantId],
+    );
+    app.get(SubscriptionsService).invalidate(t.tenantId);
+    const sub = (await admin.get('/subscription').expect(200)).body as Body;
+    expect(sub.legacy).toBeNull();
+    expect(sub.onboardingPackages).toHaveLength(2);
+    expect(
+      (sub.estimate.lines as Body[]).map((l) => [l.kind, l.quantity, l.amount]),
+    ).toEqual([
+      ['plan', 1, 120000],
+      ['vans', 2, 6000],
+      ['photo_ai', 1, 2500],
+      ['one_time', 1, 50000],
+    ]);
+    expect(sub.estimate.amount).toBe(178500);
+    const detail = (await sa.get(`/platform/tenants/${t.tenantId}`).expect(200))
+      .body as Body;
+    expect(detail.estimate.amount).toBe(178500);
+    expect(detail.charges).toHaveLength(1);
+
+    // IA photo au-delà du quota : seulement si l'administrateur l'accepte.
+    const usage = async () =>
+      (await admin.get('/photo-ai/usage').expect(200)).body as Body;
+    expect(await usage()).toMatchObject({
+      quota: 200,
+      used: 205,
+      remaining: 0,
+      overQuota: 5,
+      lotPrice: 2500,
+      overage: false,
+    });
+    await admin.patch('/settings', { photoAiOverage: true }).expect(200);
+    expect(await usage()).toMatchObject({
+      overage: true,
+      overageAllowed: true,
+    });
+
+    // Facture du mois : le détail, les frais rattachés, puis plus retirables.
+    await jobs.subscriptions(nextMonth());
+    const [invoice] = (await admin.get('/subscription/invoices').expect(200))
+      .body as Body[];
+    expect(invoice).toMatchObject({
+      planCode: 'enterprise',
+      basePrice: 120000,
+      vanCount: 2,
+      vanPrice: 3000,
+      photoAiLots: 1,
+      photoAiLotPrice: 2500,
+      oneTimeAmount: 50000,
+      amount: 178500,
+    });
+    expect((invoice.lines as Body[]).map((l) => l.label)).toEqual([
+      'Formule Entreprise',
+      'Vente en camion : camions actifs dans le mois',
+      'IA photo : 5 photos au-delà des 200 comprises, par lot de 100',
+      'Mise en place : Démarrage',
+    ]);
+    await sa
+      .delete(`/platform/tenants/${t.tenantId}/charges/${setup.id as string}`)
+      .expect(409)
+      .expect((r) => expect(r.body.code).toBe('CHARGE_INVOICED'));
+    const after = (await admin.get('/subscription').expect(200)).body as Body;
+    expect(
+      (after.estimate.lines as Body[]).some((l) => l.kind === 'one_time'),
+    ).toBe(false);
+
+    // Formules et forfaits réglés par l'éditeur.
+    await sa
+      .patch('/platform/plans/enterprise', { vanPrice: 3500 })
+      .expect(200)
+      .expect((r) => expect(r.body.plan.vanPrice).toBe(3500));
+    expect(
+      ((await sa.get('/platform/plans').expect(200)).body as Body[]).find(
+        (p) => p.code === 'enterprise',
+      )?.vanPrice,
+    ).toBe(3500);
+    await sa
+      .patch('/platform/plans/enterprise', { vanPrice: 3000 })
+      .expect(200);
+    await sa
+      .patch('/platform/settings', {
+        onboardingPackages: [
+          { code: 'start', name: 'A', description: '', price: 1 },
+          { code: 'start', name: 'B', description: '', price: 2 },
+        ],
+      })
+      .expect(400)
+      .expect((r) => expect(r.body.code).toBe('DUPLICATE_PACKAGE_CODE'));
+    await sa
+      .patch('/platform/settings', {
+        onboardingPackages: [{ code: 'start', name: 'A', price: -1 }],
+      })
+      .expect(400);
+  });
+
+  it('clients actuels : ancien tarif garanti, rappel un mois avant, levé au changement de formule', async () => {
+    const sa = await editor('sa-ancien');
+    const t = await newTenant(app);
+    const admin = t.admin.api;
+    // Conditions d'avant la grille (Entreprise à 40 000, 100 agents), garanties encore 20 jours.
+    await owner.query(
+      `UPDATE subscriptions SET plan_code = 'enterprise', status = 'active',
+              trial_ends_at = date_trunc('month', now()) - interval '1 month',
+              legacy_until = now() + interval '20 days', legacy_monthly_price = 40000,
+              legacy_included_agents = 100, legacy_included_leads = 10,
+              legacy_extra_agent_price = 400, legacy_photo_ai_quota = 500
+       WHERE tenant_id = $1`,
+      [t.tenantId],
+    );
+    app.get(SubscriptionsService).invalidate(t.tenantId);
+    const sub = (await admin.get('/subscription').expect(200)).body as Body;
+    expect(sub.terms).toMatchObject({
+      monthlyPrice: 40000,
+      includedAgents: 100,
+      extraAgentPrice: 400,
+      photoAiQuota: 500,
+      photoAiLotPrice: 0,
+      vanPrice: 0,
+    });
+    expect(sub.usage.agents.included).toBe(100);
+    expect(sub.legacy).toMatchObject({ current: 40000, after: 120000 });
+    expect(sub.estimate.lines[0].label).toBe(
+      'Formule Entreprise · tarif garanti',
+    );
+    expect(
+      ((await admin.get('/photo-ai/usage').expect(200)).body as Body).quota,
+    ).toBe(500);
+
+    // Un mois avant la fin : les administrateurs sont prévenus, une seule fois.
+    await jobs.subscriptions();
+    await jobs.subscriptions();
+    const notes = (
+      (await admin.get('/notifications').expect(200)).body as Body[]
+    ).filter((n) => n.type === 'subscription.price_change');
+    expect(notes).toHaveLength(1);
+    expect(notes[0].title).toBe('Votre tarif évolue');
+    expect(notes[0].body).toContain('passera de 40 000 FCFA à 120 000 FCFA');
+
+    // L'éditeur prolonge la garantie (le rappel repartira), puis la lève.
+    const until = new Date(Date.now() + 90 * 86400_000).toISOString();
+    await sa
+      .patch(`/platform/tenants/${t.tenantId}/subscription`, {
+        legacyUntil: until,
+      })
+      .expect(200);
+    const [row] = await owner.query<
+      { legacyUntil: Date; notified: Date | null }[]
+    >(
+      `SELECT legacy_until AS "legacyUntil", legacy_notified_at AS notified
+       FROM subscriptions WHERE tenant_id = $1`,
+      [t.tenantId],
+    );
+    expect(row.legacyUntil.toISOString()).toBe(until);
+    expect(row.notified).toBeNull();
+    await sa
+      .patch(`/platform/tenants/${t.tenantId}/subscription`, {
+        legacyUntil: null,
+      })
+      .expect(200);
+    const now = (await admin.get('/subscription').expect(200)).body as Body;
+    expect(now.terms).toMatchObject({
+      monthlyPrice: 120000,
+      legacyUntil: null,
+    });
+    expect(now.usage.agents.included).toBe(50);
+    await sa
+      .patch(`/platform/tenants/${t.tenantId}/subscription`, {
+        legacyUntil: until,
+      })
+      .expect(409)
+      .expect((r) => expect(r.body.code).toBe('NO_LEGACY_TERMS'));
+
+    // Changement de formule par la structure : la grille actuelle s'applique.
+    await owner.query(
+      `UPDATE subscriptions SET legacy_until = now() + interval '5 months',
+              legacy_monthly_price = 40000, legacy_included_agents = 100
+       WHERE tenant_id = $1`,
+      [t.tenantId],
+    );
+    const changed = (
+      await admin.patch('/subscription', { planCode: 'advanced' }).expect(200)
+    ).body as Body;
+    expect(changed.subscription.legacyUntil).toBeNull();
+    expect(changed.terms.monthlyPrice).toBe(45000);
   });
 });
 
@@ -6380,9 +6725,9 @@ describe('Quotas des formules', () => {
       limit: 12,
     });
     expect(bought.estimate).toMatchObject({
-      basePrice: 5000,
+      basePrice: 15000,
       extraAgents: 2,
-      extraAgentPrice: 500,
+      extraAgentPrice: 1000,
     });
     await t.admin.api
       .patch(`/users/${agents[0].id}`, { isActive: true })
@@ -7858,8 +8203,8 @@ describe('Espace éditeur (super administrateur)', () => {
     ).items[0];
     expect(listed).toMatchObject({
       id: tenantId,
-      planName: 'Base',
-      mrr: 5000,
+      planName: 'Essentiel',
+      mrr: 15000,
       agentLimit: 10,
       adminEmail,
     });
@@ -7877,7 +8222,7 @@ describe('Espace éditeur (super administrateur)', () => {
     expect(detail.tenant.notes).toBe('Contrat signé le 2 octobre');
     expect(detail.admins).toHaveLength(1);
     expect(detail.activity).toHaveLength(30);
-    expect(detail.estimate).toMatchObject({ basePrice: 5000 });
+    expect(detail.estimate).toMatchObject({ basePrice: 15000 });
     expect(detail.history.map((h: Body) => h.action)).toEqual(
       expect.arrayContaining(['tenant.create', 'tenant.update']),
     );
@@ -8202,7 +8547,7 @@ describe('Espace éditeur (super administrateur)', () => {
     expect(me.subscription.features.sort()).toEqual(['groups', 'stats']);
     expect(me.subscription.upgrades.missions).toEqual({
       code: 'advanced',
-      name: 'Avancée',
+      name: 'Pro',
     });
     await t.admin.api.get('/stats/overview').expect(200);
     await t.admin.api
@@ -8211,7 +8556,7 @@ describe('Espace éditeur (super administrateur)', () => {
       .expect((r) =>
         expect(r.body).toMatchObject({
           requiredPlan: 'advanced',
-          requiredPlanName: 'Avancée',
+          requiredPlanName: 'Pro',
         }),
       );
     // Proposée aux structures dans leur page Abonnement, avec ses avantages.
@@ -8550,7 +8895,7 @@ describe('Espace éditeur (super administrateur)', () => {
     });
     // Essai : toutes les fonctionnalités, quotas de la formule d'essai.
     expect(sub.features).toHaveLength(15);
-    expect(sub.usage.agents.limit).toBe(30);
+    expect(sub.usage.agents.limit).toBe(25);
     await sa
       .patch('/platform/settings', {
         trialPlanCode: 'enterprise',
@@ -8560,7 +8905,7 @@ describe('Espace éditeur (super administrateur)', () => {
     expect(
       (await t.admin.api.get('/subscription').expect(200)).body.usage.agents
         .limit,
-    ).toBe(100);
+    ).toBe(50);
   });
 
   it('double authentification : activation, connexion en deux étapes, secours, réinitialisation', async () => {

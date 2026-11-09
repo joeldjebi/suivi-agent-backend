@@ -2,7 +2,9 @@ import type {
   PhotoAiProviderChoice,
   BillingCycle,
   Feature,
+  InvoiceLine,
   InvoiceStatus,
+  OnboardingPackage,
   PlanCode,
   SubscriptionStatus,
 } from '@suivi/shared';
@@ -52,6 +54,10 @@ export class Plan {
   /** IA photo : prix d'un lot de 100 photos analysées au-delà du quota */
   @Column({ name: 'photo_ai_extra_price', type: 'integer', default: 0 })
   photoAiExtraPrice: number;
+
+  /** Vente en camion : prix mensuel d'un camion actif dans le mois (0 = compris) */
+  @Column({ name: 'van_price', type: 'integer', default: 0 })
+  vanPrice: number;
 
   @Column({ type: 'integer' })
   sort: number;
@@ -124,6 +130,10 @@ export class PlatformSettings {
   /** IA photo : fournisseur actif (Anthropic, Mistral AI) ou « off » */
   @Column({ name: 'photo_ai_provider', type: 'text', default: 'anthropic' })
   photoAiProvider: PhotoAiProviderChoice;
+
+  /** Forfaits de mise en place proposés (formation, import, configuration) */
+  @Column({ name: 'onboarding_packages', type: 'jsonb', default: [] })
+  onboardingPackages: OnboardingPackage[];
 }
 
 @Entity('subscriptions')
@@ -169,6 +179,32 @@ export class Subscription {
 
   @Column({ name: 'suspension_reason', type: 'text', nullable: true })
   suspensionReason: string | null;
+
+  /**
+   * Ancien tarif garanti jusqu'à cette date (changement de grille) : prix, quotas et quota de
+   * photos d'avant ; pas de camions ni de lots de photos facturés. Null : tarif en vigueur.
+   */
+  @Column({ name: 'legacy_until', type: 'timestamptz', nullable: true })
+  legacyUntil: Date | null;
+
+  @Column({ name: 'legacy_monthly_price', type: 'integer', nullable: true })
+  legacyMonthlyPrice: number | null;
+
+  @Column({ name: 'legacy_included_agents', type: 'integer', nullable: true })
+  legacyIncludedAgents: number | null;
+
+  @Column({ name: 'legacy_included_leads', type: 'integer', nullable: true })
+  legacyIncludedLeads: number | null;
+
+  @Column({ name: 'legacy_extra_agent_price', type: 'integer', nullable: true })
+  legacyExtraAgentPrice: number | null;
+
+  @Column({ name: 'legacy_photo_ai_quota', type: 'integer', nullable: true })
+  legacyPhotoAiQuota: number | null;
+
+  /** Rappel envoyé aux administrateurs un mois avant la fin de l'ancien tarif */
+  @Column({ name: 'legacy_notified_at', type: 'timestamptz', nullable: true })
+  legacyNotifiedAt: Date | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
@@ -250,4 +286,63 @@ export class Invoice {
 
   @Column({ name: 'void_reason', type: 'text', nullable: true })
   voidReason: string | null;
+
+  /** Camions actifs dans le mois et leur prix */
+  @Column({ name: 'van_count', type: 'integer', default: 0 })
+  vanCount: number;
+
+  @Column({ name: 'van_price', type: 'integer', default: 0 })
+  vanPrice: number;
+
+  /** Lots de 100 photos IA au-delà du quota, et leur prix */
+  @Column({ name: 'photo_ai_lots', type: 'integer', default: 0 })
+  photoAiLots: number;
+
+  @Column({ name: 'photo_ai_lot_price', type: 'integer', default: 0 })
+  photoAiLotPrice: number;
+
+  /** Frais ponctuels (mise en place) ajoutés à cette facture */
+  @Column({ name: 'one_time_amount', type: 'integer', default: 0 })
+  oneTimeAmount: number;
+
+  /** Détail ligne par ligne */
+  @Column({ type: 'jsonb', default: [] })
+  lines: InvoiceLine[];
+}
+
+/**
+ * Frais ponctuels (forfait de mise en place) décidés par l'éditeur : ajoutés à la prochaine
+ * facture mensuelle de la structure, puis rattachés à elle.
+ */
+@Entity('one_time_charges')
+export class OneTimeCharge {
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
+
+  @Column({ name: 'tenant_id', type: 'uuid' })
+  tenantId: string;
+
+  @Column()
+  label: string;
+
+  @Column({ type: 'integer' })
+  amount: number;
+
+  /** Forfait d'origine (null : frais saisis à la main) */
+  @Column({ name: 'package_code', type: 'text', nullable: true })
+  packageCode: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  note: string | null;
+
+  /** Compte de l'éditeur qui a ajouté les frais */
+  @Column({ name: 'created_by', type: 'text', nullable: true })
+  createdBy: string | null;
+
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
+  createdAt: Date;
+
+  /** Facture qui les porte (null : pas encore facturés) */
+  @Column({ name: 'invoice_id', type: 'uuid', nullable: true })
+  invoiceId: string | null;
 }

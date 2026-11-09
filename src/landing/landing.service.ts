@@ -92,11 +92,15 @@ export class LandingService {
         includedAgents: p.includedAgents,
         includedLeads: p.includedLeads,
         extraAgentPrice: p.extraAgentPrice,
+        vanPrice: p.vanPrice,
+        photoAiMonthlyQuota: p.photoAiMonthlyQuota,
+        photoAiExtraPrice: p.photoAiExtraPrice,
         features: p.features,
       })),
       currency: platform.currency,
       trialDays: platform.trialDays,
       annualDiscountPercent: platform.annualDiscountPercent,
+      onboardingPackages: platform.onboardingPackages,
     };
   }
 

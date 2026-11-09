@@ -63,16 +63,29 @@ export async function resetDatabase(app: INestApplication, owner: DataSource) {
   await owner.query(
     `DELETE FROM plans WHERE code NOT IN ('base', 'advanced', 'enterprise')`,
   );
+  // Grille du 9 novembre 2026 : Essentiel, Pro, Entreprise (camions et lots de photos IA).
   await owner.query(`
-    UPDATE plans SET is_active = true, monthly_price = v.price, included_agents = v.agents,
-                     included_leads = v.leads, extra_agent_price = v.extra, features = v.features
+    UPDATE plans SET is_active = true, name = v.name, monthly_price = v.price,
+                     included_agents = v.agents, included_leads = v.leads,
+                     extra_agent_price = v.extra, van_price = v.van,
+                     photo_ai_monthly_quota = v.photos, photo_ai_extra_price = v.lot,
+                     features = v.features
     FROM (VALUES
-      ('base', 5000, 10, 1, 500, ARRAY[]::text[]),
-      ('advanced', 15000, 30, 3, 450, ARRAY['groups', 'manual_approval', 'missions', 'branding', 'exports', 'push_notifications']),
-      ('enterprise', 40000, 100, 10, 400, ARRAY['groups', 'manual_approval', 'missions', 'branding', 'exports',
-                                                'stats', 'team_leads', 'audit', 'payroll', 'push_notifications'])
-    ) AS v(code, price, agents, leads, extra, features)
+      ('base', 'Essentiel', 15000, 10, 1, 1000, 0, 0, 0, ARRAY[]::text[]),
+      ('advanced', 'Pro', 45000, 25, 3, 1500, 0, 0, 0,
+       ARRAY['groups', 'manual_approval', 'missions', 'branding', 'exports', 'push_notifications']),
+      ('enterprise', 'Entreprise', 120000, 50, 10, 2000, 3000, 200, 2500,
+       ARRAY['groups', 'manual_approval', 'missions', 'branding', 'exports',
+             'stats', 'team_leads', 'audit', 'payroll', 'push_notifications'])
+    ) AS v(code, name, price, agents, leads, extra, van, photos, lot, features)
     WHERE plans.code = v.code`);
+  await owner.query(`
+    UPDATE platform_settings SET onboarding_packages = '[
+      {"code": "start", "name": "Démarrage", "price": 50000,
+       "description": "Formation à distance, import de vos points de vente et de vos produits."},
+      {"code": "assisted", "name": "Accompagné", "price": 250000,
+       "description": "Formation sur place, configuration complète, un mois de suivi."}
+    ]'::jsonb`);
   const redis = app.get(RedisService).client;
   const keys = [
     ...(await redis.keys('live:*')),

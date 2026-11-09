@@ -6,6 +6,7 @@ import { DayEndReason, Feature, ZoneRequestStatus } from '@suivi/shared';
 import { In } from 'typeorm';
 import { DbService } from '../common/db.service';
 import { AlertsService } from '../common/alerts.service';
+import { NotificationsService } from '../common/notifications.service';
 import { ReportsService } from '../reports/reports.service';
 import { ZoneExitsService } from '../common/zone-exits.service';
 import { workDate } from '../common/time.util';
@@ -34,6 +35,7 @@ export class JobsService {
     private readonly missions: MissionsService,
     private readonly positions: PositionsService,
     private readonly subscriptionsService: SubscriptionsService,
+    private readonly notifications: NotificationsService,
     private readonly payrollService: PayrollService,
     private readonly zoneExits: ZoneExitsService,
     private readonly alerts: AlertsService,
@@ -87,9 +89,15 @@ export class JobsService {
   /** Abonnements : fin d'essai, facture du mois écoulé, impayés (idempotent). */
   @Cron(CronExpression.EVERY_HOUR)
   async subscriptions(now = new Date()) {
-    await this.forEachTenant('subscriptions', (settings) =>
-      this.subscriptionsService.daily(settings.tenantId, now),
-    );
+    await this.forEachTenant('subscriptions', async (settings) => {
+      const reminder = await this.subscriptionsService.daily(
+        settings.tenantId,
+        now,
+      );
+      // Fin de l'ancien tarif dans un mois : les administrateurs sont prévenus.
+      if (reminder)
+        await this.notifications.notify(reminder.userIds, reminder.input);
+    });
   }
 
   /** Rémunération (formule Entreprise) : paie de la période écoulée préparée en brouillon. */

@@ -1,4 +1,4 @@
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsBoolean,
   IsDateString,
@@ -18,6 +18,8 @@ import {
   MinLength,
   IsUrl,
   ValidateIf,
+  ValidateNested,
+  ArrayMaxSize,
 } from 'class-validator';
 import {
   BillingCycle,
@@ -257,6 +259,57 @@ export class PlatformSubscriptionDto {
   @IsOptional()
   @IsDateString()
   trialEndsAt?: string;
+
+  /** Ancien tarif garanti : nouvelle date de fin, ou null pour appliquer la grille actuelle */
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @IsDateString()
+  legacyUntil?: string | null;
+}
+
+/** Forfait de mise en place proposé aux structures. */
+export class OnboardingPackageDto {
+  @Matches(/^[a-z0-9][a-z0-9-]{1,29}$/)
+  code: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(60)
+  name: string;
+
+  @IsString()
+  @MaxLength(300)
+  description: string;
+
+  @IsInt()
+  @Min(0)
+  price: number;
+}
+
+/**
+ * Frais ponctuels pour une structure, ajoutés à sa prochaine facture : un forfait de mise en
+ * place (son prix, sauf montant indiqué), ou un libellé et un montant libres.
+ */
+export class OneTimeChargeDto {
+  @IsOptional()
+  @IsString()
+  packageCode?: string;
+
+  @ValidateIf((o: OneTimeChargeDto) => !o.packageCode)
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(120)
+  label?: string;
+
+  @ValidateIf((o: OneTimeChargeDto) => !o.packageCode)
+  @IsInt()
+  @Min(1)
+  amount?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  note?: string;
 }
 
 /** Photos analysées accordées en plus du quota, pour le mois en cours. */
@@ -380,6 +433,12 @@ export class CreatePlanDto {
   @Min(0)
   photoAiExtraPrice?: number;
 
+  /** Vente en camion : prix mensuel d'un camion actif dans le mois (0 = compris) */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  vanPrice?: number;
+
   /** Avantages inclus (fonctionnalités de l'application) */
   @IsArray()
   @ArrayUnique()
@@ -442,6 +501,12 @@ export class UpdatePlanDto {
   @IsInt()
   @Min(0)
   photoAiExtraPrice?: number;
+
+  /** Vente en camion : prix mensuel d'un camion actif dans le mois (0 = compris) */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  vanPrice?: number;
 
   @IsOptional()
   @IsArray()
@@ -528,6 +593,14 @@ export class UpdatePlatformSettingsDto {
   @IsOptional()
   @IsIn(['anthropic', 'mistral', 'off'])
   photoAiProvider?: PhotoAiProviderChoice;
+
+  /** Forfaits de mise en place affichés aux structures et sur le site */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @ValidateNested({ each: true })
+  @Type(() => OnboardingPackageDto)
+  onboardingPackages?: OnboardingPackageDto[];
 }
 
 export class TenantUsersQuery extends PaginationQuery {

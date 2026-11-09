@@ -38,6 +38,41 @@ export const InvoiceStatus = {
 export type InvoiceStatus = (typeof InvoiceStatus)[keyof typeof InvoiceStatus];
 
 /**
+ * Lignes d'une facture : le forfait (au prorata après l'essai), les agents en plus, la remise
+ * annuelle (sur ces deux lignes seulement), puis ce qui dépend du mois : camions actifs, lots de
+ * photos IA au-delà du quota, frais de mise en place.
+ */
+export const InvoiceLineKind = {
+  Plan: 'plan',
+  ExtraAgents: 'extra_agents',
+  Discount: 'discount',
+  Vans: 'vans',
+  PhotoAi: 'photo_ai',
+  OneTime: 'one_time',
+} as const;
+export type InvoiceLineKind = (typeof InvoiceLineKind)[keyof typeof InvoiceLineKind];
+
+export interface InvoiceLine {
+  kind: InvoiceLineKind;
+  label: string;
+  quantity: number;
+  unitPrice: number;
+  /** Négatif pour la remise */
+  amount: number;
+}
+
+/** Photos IA facturées par lots de cette taille au-delà du quota du mois. */
+export const PHOTO_AI_LOT_SIZE = 100;
+
+/** Forfait de mise en place proposé par l'éditeur (formation, import, configuration). */
+export interface OnboardingPackage {
+  code: string;
+  name: string;
+  description: string;
+  price: number;
+}
+
+/**
  * Fonctionnalités soumises à formule. Le suivi en temps réel, les zones, les journées,
  * l'historique et l'app mobile sont inclus dans toutes les formules.
  */

@@ -88,6 +88,11 @@ export class UpdateSettingsDto {
   @IsBoolean()
   photoAiAuto?: boolean;
 
+  /** IA photo : continuer au-delà du quota du mois, facturé par lot de 100 photos */
+  @IsOptional()
+  @IsBoolean()
+  photoAiOverage?: boolean;
+
   /** RG-08 */
   @IsOptional()
   @IsBoolean()

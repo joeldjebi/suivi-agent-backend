@@ -1,16 +1,23 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { In, IsNull } from 'typeorm';
 import {
   ApprovalMode,
   BillingCycle,
   Feature,
+  InvoiceLineKind,
   InvoiceStatus,
+  PHOTO_AI_LOT_SIZE,
   PlanCode,
+  Role,
   SubscriptionStatus,
 } from '@suivi/shared';
+import type { InvoiceLine } from '@suivi/shared';
 import { BusinessException, conflict } from '../common/business.exception';
 import { DbService } from '../common/db.service';
+import type { NotificationInput } from '../common/notifications.service';
 import {
   Invoice,
+  OneTimeCharge,
   Plan,
   PlatformSettings,
   Subscription,
@@ -19,6 +26,8 @@ import {
 import type { ChangePlanDto } from './subscriptions.dto';
 
 const DAY = 86400_000;
+/** Les administrateurs sont prévenus de la fin de l'ancien tarif ce nombre de jours avant. */
+const LEGACY_NOTICE_DAYS = 30;
 /** Cache court : le contrôle d'accès lit l'abonnement à chaque requête. */
 const CACHE_MS = 30_000;
 
@@ -53,7 +62,96 @@ const featuresOf = (
 
 const monthStart = (d: Date) =>
   new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+const nextMonth = (d: Date) =>
+  new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
 const isoDay = (d: Date) => d.toISOString().slice(0, 10);
+const frDate = (d: Date) =>
+  d.toLocaleDateString('fr-FR', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+const money = (n: number, currency: string) =>
+  `${new Intl.NumberFormat('fr-FR').format(n).replace(/\u202f/g, ' ')} ${currency === 'XOF' ? 'FCFA' : currency}`;
+
+/** Champs d'un abonnement qui comptent pour le prix. */
+type PricedSubscription = Pick<
+  Subscription,
+  | 'trialEndsAt'
+  | 'billingCycle'
+  | 'extraAgents'
+  | 'customMonthlyPrice'
+  | 'customIncludedAgents'
+  | 'customIncludedLeads'
+  | 'legacyUntil'
+  | 'legacyMonthlyPrice'
+  | 'legacyIncludedAgents'
+  | 'legacyIncludedLeads'
+  | 'legacyExtraAgentPrice'
+  | 'legacyPhotoAiQuota'
+>;
+
+/** Rappel de fin de l'ancien tarif, à envoyer aux administrateurs de la structure. */
+export interface LegacyReminder {
+  userIds: string[];
+  input: NotificationInput;
+}
+
+/** Conditions en vigueur d'un abonnement. */
+export interface Terms {
+  monthlyPrice: number;
+  includedAgents: number;
+  includedLeads: number;
+  extraAgentPrice: number;
+  /** Photos IA comprises chaque mois */
+  photoAiQuota: number;
+  /** Lot de 100 photos IA au-delà du quota (0 : pas de dépassement facturé) */
+  photoAiLotPrice: number;
+  /** Camion actif dans le mois (0 : compris) */
+  vanPrice: number;
+  /** Ancien tarif garanti jusqu'à cette date (null : grille en vigueur) */
+  legacyUntil: Date | null;
+}
+
+/**
+ * Conditions d'un abonnement à une date : celles négociées par l'éditeur d'abord, puis l'ancien
+ * tarif tant qu'il est garanti (sans camions ni lots de photos facturés), puis la formule.
+ */
+export function termsOf(
+  sub: PricedSubscription,
+  plan: Plan,
+  at = new Date(),
+): Terms {
+  const legacy = !!sub.legacyUntil && sub.legacyUntil > at;
+  const pick = (old: number | null, current: number) =>
+    legacy ? (old ?? current) : current;
+  return {
+    monthlyPrice:
+      sub.customMonthlyPrice ?? pick(sub.legacyMonthlyPrice, plan.monthlyPrice),
+    includedAgents:
+      sub.customIncludedAgents ??
+      pick(sub.legacyIncludedAgents, plan.includedAgents),
+    includedLeads:
+      sub.customIncludedLeads ??
+      pick(sub.legacyIncludedLeads, plan.includedLeads),
+    extraAgentPrice: pick(sub.legacyExtraAgentPrice, plan.extraAgentPrice),
+    photoAiQuota: pick(sub.legacyPhotoAiQuota, plan.photoAiMonthlyQuota),
+    photoAiLotPrice: legacy ? 0 : plan.photoAiExtraPrice,
+    vanPrice: legacy ? 0 : plan.vanPrice,
+    legacyUntil: legacy ? sub.legacyUntil : null,
+  };
+}
+
+/** Ancien tarif levé : changement de formule, ou décision de l'éditeur. */
+export const NO_LEGACY = {
+  legacyUntil: null,
+  legacyMonthlyPrice: null,
+  legacyIncludedAgents: null,
+  legacyIncludedLeads: null,
+  legacyExtraAgentPrice: null,
+  legacyPhotoAiQuota: null,
+  legacyNotifiedAt: null,
+} satisfies Partial<Subscription>;
 
 export const featureNotInPlan = (
   feature: Feature,
@@ -208,7 +306,11 @@ export class SubscriptionsService {
     const plans = catalog.filter((p) => p.isActive || p.code === sub.planCode);
     const plan = catalog.find((p) => p.code === sub.planCode)!;
     const now = new Date();
-    const estimate = this.estimate(sub, plan, platform, monthStart(now));
+    // Le mois en cours, avec ce qui est déjà consommé (camions, photos) et les frais en attente.
+    const estimate = await this.bill(sub, plan, platform, monthStart(now), {
+      until: now,
+    });
+    const terms = termsOf(sub, plan, now);
     const usage = await this.usage(sub, catalog);
     const [unpaid] = await m.query<{ count: number; amount: number }[]>(
       `SELECT count(*)::int AS count, coalesce(sum(amount), 0)::int AS amount
@@ -220,6 +322,24 @@ export class SubscriptionsService {
       plans: plans.map((p) => ({ ...p, features: planFeatures(p) })),
       currency: platform.currency,
       annualDiscountPercent: platform.annualDiscountPercent,
+      terms,
+      // Ancien tarif garanti : sa fin, et le forfait d'un mois complet ensuite (formule actuelle).
+      legacy: terms.legacyUntil
+        ? {
+            until: terms.legacyUntil,
+            current: this.estimate(sub, plan, platform, monthStart(now), {
+              full: true,
+            }).amount,
+            after: this.estimate(
+              { ...sub, ...NO_LEGACY },
+              plan,
+              platform,
+              monthStart(now),
+              { full: true },
+            ).amount,
+          }
+        : null,
+      onboardingPackages: platform.onboardingPackages,
       trialDaysLeft:
         sub.status === SubscriptionStatus.Trialing && sub.trialEndsAt
           ? Math.max(
@@ -263,12 +383,17 @@ export class SubscriptionsService {
         ? (await this.platform()).trialPlanCode
         : sub.planCode;
     const plan = list.find((p) => p.code === code)!;
-    // Conditions négociées par l'éditeur : elles priment, essai compris.
-    const includedAgents = sub.customIncludedAgents ?? plan.includedAgents;
+    // Conditions négociées par l'éditeur, puis l'ancien tarif garanti (hors essai), puis la formule.
+    const terms = termsOf(
+      sub.status === SubscriptionStatus.Trialing
+        ? { ...sub, ...NO_LEGACY }
+        : sub,
+      plan,
+    );
     return {
-      includedAgents,
-      agents: includedAgents + sub.extraAgents,
-      leads: sub.customIncludedLeads ?? plan.includedLeads,
+      includedAgents: terms.includedAgents,
+      agents: terms.includedAgents + sub.extraAgents,
+      leads: terms.includedLeads,
     };
   }
 
@@ -383,6 +508,8 @@ export class SubscriptionsService {
       Subscription,
       { tenantId },
       {
+        // Nouvelle formule : la grille en vigueur s'applique (fin de l'ancien tarif garanti).
+        ...(planCode !== sub.planCode ? NO_LEGACY : {}),
         planCode,
         billingCycle: cycle,
         extraAgents,
@@ -401,24 +528,23 @@ export class SubscriptionsService {
   }
 
   /**
-   * Montant d'un mois : forfait + agents supplémentaires, remise annuelle déduite,
-   * au prorata des jours après l'essai si celui-ci se termine dans le mois.
+   * Forfait d'un mois : formule + agents supplémentaires, remise annuelle déduite, au prorata
+   * des jours après l'essai si celui-ci se termine dans le mois (`full` : mois complet). Les
+   * conditions sont celles en vigueur au début du mois (ancien tarif garanti compris).
    */
   estimate(
-    sub: Pick<
-      Subscription,
-      'trialEndsAt' | 'billingCycle' | 'extraAgents' | 'customMonthlyPrice'
-    >,
+    sub: PricedSubscription,
     plan: Plan,
     platform: PlatformSettings,
     month: Date,
+    options: { full?: boolean } = {},
   ) {
-    const next = new Date(
-      Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + 1, 1),
-    );
+    const next = nextMonth(month);
     const days = (next.getTime() - month.getTime()) / DAY;
     const billableFrom =
-      sub.trialEndsAt && sub.trialEndsAt > month ? sub.trialEndsAt : month;
+      !options.full && sub.trialEndsAt && sub.trialEndsAt > month
+        ? sub.trialEndsAt
+        : month;
     const billableDays = Math.max(
       0,
       Math.ceil((next.getTime() - billableFrom.getTime()) / DAY),
@@ -428,27 +554,168 @@ export class SubscriptionsService {
       sub.billingCycle === BillingCycle.Annual
         ? platform.annualDiscountPercent
         : 0;
-    const basePrice = sub.customMonthlyPrice ?? plan.monthlyPrice;
-    const gross = basePrice + sub.extraAgents * plan.extraAgentPrice;
+    const terms = termsOf(sub, plan, month);
+    const basePrice = terms.monthlyPrice;
+    const gross = basePrice + sub.extraAgents * terms.extraAgentPrice;
     return {
       month: isoDay(month).slice(0, 7),
       basePrice,
       extraAgents: sub.extraAgents,
-      extraAgentPrice: plan.extraAgentPrice,
+      extraAgentPrice: terms.extraAgentPrice,
       discountPercent: discount,
       prorataPercent: prorata,
       amount: Math.round((((gross * (100 - discount)) / 100) * prorata) / 100),
+      terms,
     };
   }
 
   /**
-   * Tâche quotidienne, par structure : fin d'essai, facture du mois écoulé,
-   * relance (impayé) puis suspension, et réactivation quand tout est réglé.
+   * Ce qui s'est passé dans le mois pour la structure courante : camions actifs (au moins un
+   * mouvement de stock), photos IA analysées depuis `photosFrom`, supplément de l'éditeur.
    */
-  async daily(tenantId: string, now = new Date()) {
+  private async monthUsage(month: Date, until: Date, photosFrom: Date) {
+    const [row] = await this.db.manager.query<
+      { vans: number; photos: number; bonus: number }[]
+    >(
+      `SELECT (SELECT count(*) FROM stock_locations l
+                WHERE l.tenant_id = $5 AND l.kind = 'van' AND EXISTS (
+                  SELECT 1 FROM stock_movements mv
+                  WHERE (mv.from_location_id = l.id OR mv.to_location_id = l.id)
+                    AND mv.status <> 'cancelled'
+                    AND mv.occurred_at >= $1 AND mv.occurred_at < $2))::int AS vans,
+              (SELECT count(*) FROM photo_analyses
+                WHERE tenant_id = $5 AND status = 'done'
+                  AND created_at >= $3 AND created_at < $2)::int AS photos,
+              coalesce((SELECT photos FROM photo_ai_bonuses
+                        WHERE tenant_id = $5 AND month = $4), 0)::int AS bonus`,
+      [month, until, photosFrom, isoDay(month).slice(0, 7), this.db.tenantId],
+    );
+    return row;
+  }
+
+  /**
+   * Facture d'un mois, ligne par ligne : forfait et agents en plus (remise annuelle déduite),
+   * camions actifs, lots de photos IA au-delà du quota, frais de mise en place pas encore
+   * facturés. `until` : mois en cours compté jusqu'à cet instant (estimation).
+   */
+  async bill(
+    sub: Subscription,
+    plan: Plan,
+    platform: PlatformSettings,
+    month: Date,
+    options: { until?: Date } = {},
+  ) {
+    const base = this.estimate(sub, plan, platform, month);
+    const { terms } = base;
+    const end = nextMonth(month);
+    const until = options.until && options.until < end ? options.until : end;
+    // Les photos de l'essai relevaient de la formule d'essai : elles ne sont pas facturées.
+    const photosFrom =
+      sub.trialEndsAt && sub.trialEndsAt > month ? sub.trialEndsAt : month;
+    const used = await this.monthUsage(month, until, photosFrom);
+    const vanCount = terms.vanPrice > 0 ? used.vans : 0;
+    const included = terms.photoAiQuota + used.bonus;
+    const over = Math.max(0, used.photos - included);
+    const photoAiLots =
+      terms.photoAiLotPrice > 0 ? Math.ceil(over / PHOTO_AI_LOT_SIZE) : 0;
+    const charges = await this.db.manager.find(OneTimeCharge, {
+      where: { tenantId: this.db.tenantId, invoiceId: IsNull() },
+      order: { createdAt: 'ASC' },
+    });
+
+    const lines: InvoiceLine[] = [];
+    const share = (n: number) => Math.round((n * base.prorataPercent) / 100);
+    lines.push({
+      kind: InvoiceLineKind.Plan,
+      label: [
+        `Formule ${plan.name}`,
+        base.prorataPercent < 100
+          ? `${base.prorataPercent} % du mois, après l’essai`
+          : null,
+        terms.legacyUntil ? 'tarif garanti' : null,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      quantity: 1,
+      unitPrice: base.basePrice,
+      amount: share(base.basePrice),
+    });
+    if (sub.extraAgents > 0)
+      lines.push({
+        kind: InvoiceLineKind.ExtraAgents,
+        label: 'Agents en plus',
+        quantity: sub.extraAgents,
+        unitPrice: terms.extraAgentPrice,
+        amount: share(sub.extraAgents * terms.extraAgentPrice),
+      });
+    const recurring = lines.reduce((s, l) => s + l.amount, 0);
+    if (base.discountPercent > 0 && base.amount !== recurring)
+      lines.push({
+        kind: InvoiceLineKind.Discount,
+        label: `Remise annuelle de ${base.discountPercent} %`,
+        quantity: 1,
+        unitPrice: base.amount - recurring,
+        amount: base.amount - recurring,
+      });
+    if (vanCount > 0)
+      lines.push({
+        kind: InvoiceLineKind.Vans,
+        label: 'Vente en camion : camions actifs dans le mois',
+        quantity: vanCount,
+        unitPrice: terms.vanPrice,
+        amount: vanCount * terms.vanPrice,
+      });
+    if (photoAiLots > 0)
+      lines.push({
+        kind: InvoiceLineKind.PhotoAi,
+        label: `IA photo : ${over} photo${over > 1 ? 's' : ''} au-delà des ${included} comprises, par lot de ${PHOTO_AI_LOT_SIZE}`,
+        quantity: photoAiLots,
+        unitPrice: terms.photoAiLotPrice,
+        amount: photoAiLots * terms.photoAiLotPrice,
+      });
+    for (const c of charges)
+      lines.push({
+        kind: InvoiceLineKind.OneTime,
+        label: c.label,
+        quantity: 1,
+        unitPrice: c.amount,
+        amount: c.amount,
+      });
+    const oneTimeAmount = charges.reduce((s, c) => s + c.amount, 0);
+    return {
+      ...base,
+      /** Forfait et agents en plus, remise déduite */
+      recurringAmount: base.amount,
+      vanCount,
+      vanPrice: terms.vanPrice,
+      photoAiPhotos: used.photos,
+      photoAiIncluded: included,
+      photoAiLots,
+      photoAiLotPrice: terms.photoAiLotPrice,
+      oneTimeAmount,
+      charges,
+      lines,
+      amount:
+        base.amount +
+        vanCount * terms.vanPrice +
+        photoAiLots * terms.photoAiLotPrice +
+        oneTimeAmount,
+    };
+  }
+
+  /**
+   * Tâche quotidienne, par structure : fin d'essai, facture du mois écoulé, relance (impayé)
+   * puis suspension, et réactivation quand tout est réglé. Rend le rappel de fin de l'ancien
+   * tarif à envoyer aux administrateurs (les notifications dépendent des abonnements : c'est
+   * la tâche planifiée qui l'envoie).
+   */
+  async daily(
+    tenantId: string,
+    now = new Date(),
+  ): Promise<LegacyReminder | null> {
     const m = this.db.manager;
     const sub = await m.findOneBy(Subscription, { tenantId });
-    if (!sub || sub.status === SubscriptionStatus.Cancelled) return;
+    if (!sub || sub.status === SubscriptionStatus.Cancelled) return null;
     const platform = await this.platform();
 
     if (
@@ -473,36 +740,100 @@ export class SubscriptionsService {
       sub.trialEndsAt && sub.trialEndsAt >= monthStart(now);
     if (!exists && !trialCoversMonth) {
       const plan = await m.findOneByOrFail(Plan, { code: sub.planCode });
-      const estimate = this.estimate(sub, plan, platform, previous);
+      const bill = await this.bill(sub, plan, platform, previous);
       const [{ agents }] = await m.query<{ agents: number }[]>(
         `SELECT count(*)::int AS agents FROM users WHERE role = 'agent' AND is_active`,
       );
-      if (estimate.amount > 0) {
-        await m.insert(Invoice, {
+      if (bill.amount > 0) {
+        const { identifiers } = await m.insert(Invoice, {
           tenantId,
           number: `F-${isoDay(previous).slice(0, 7).replace('-', '')}-${tenantId.slice(0, 8).toUpperCase()}`,
           month: isoDay(previous),
           planCode: sub.planCode,
           billingCycle: sub.billingCycle,
           agents,
-          basePrice: estimate.basePrice,
-          extraAgents: estimate.extraAgents,
-          extraAgentPrice: estimate.extraAgentPrice,
-          discountPercent: estimate.discountPercent,
-          prorataPercent: estimate.prorataPercent,
-          amount: estimate.amount,
+          basePrice: bill.basePrice,
+          extraAgents: bill.extraAgents,
+          extraAgentPrice: bill.extraAgentPrice,
+          discountPercent: bill.discountPercent,
+          prorataPercent: bill.prorataPercent,
+          vanCount: bill.vanCount,
+          vanPrice: bill.vanPrice,
+          photoAiLots: bill.photoAiLots,
+          photoAiLotPrice: bill.photoAiLotPrice,
+          oneTimeAmount: bill.oneTimeAmount,
+          lines: bill.lines,
+          amount: bill.amount,
           currency: platform.currency,
           status: InvoiceStatus.Pending,
           issuedAt: now,
           dueAt: new Date(now.getTime() + platform.invoiceDueDays * DAY),
         });
+        if (bill.charges.length)
+          await m.update(
+            OneTimeCharge,
+            { id: In(bill.charges.map((c) => c.id)) },
+            { invoiceId: (identifiers[0] as { id: string }).id },
+          );
         this.logger.log(
-          `Structure ${tenantId} : facture ${estimate.month} (${estimate.amount} ${platform.currency})`,
+          `Structure ${tenantId} : facture ${bill.month} (${bill.amount} ${platform.currency})`,
         );
       }
     }
 
+    const reminder = await this.legacyReminder(sub, platform, now);
     await this.syncStatus(tenantId, now);
+    return reminder;
+  }
+
+  /**
+   * Un mois avant la fin de l'ancien tarif garanti, les administrateurs sont prévenus une fois :
+   * date, forfait actuel et forfait à venir (même formule, mêmes agents en plus).
+   */
+  private async legacyReminder(
+    sub: Subscription,
+    platform: PlatformSettings,
+    now: Date,
+  ): Promise<LegacyReminder | null> {
+    if (!sub.legacyUntil || sub.legacyNotifiedAt || sub.legacyUntil <= now)
+      return null;
+    if (sub.legacyUntil.getTime() - now.getTime() > LEGACY_NOTICE_DAYS * DAY)
+      return null;
+    const m = this.db.manager;
+    const plan = await m.findOneByOrFail(Plan, { code: sub.planCode });
+    const month = monthStart(now);
+    const before = this.estimate(sub, plan, platform, month, { full: true });
+    const after = this.estimate(
+      { ...sub, ...NO_LEGACY },
+      plan,
+      platform,
+      month,
+      {
+        full: true,
+      },
+    );
+    const admins = await m.query<{ id: string }[]>(
+      `SELECT id FROM users WHERE role = $1 AND is_active`,
+      [Role.Admin],
+    );
+    await m.update(
+      Subscription,
+      { tenantId: sub.tenantId },
+      { legacyNotifiedAt: now },
+    );
+    return {
+      userIds: admins.map((a) => a.id),
+      input: {
+        type: 'subscription.price_change',
+        title: 'Votre tarif évolue',
+        body: `À partir du ${frDate(sub.legacyUntil)}, votre formule ${plan.name} passera de ${money(before.amount, platform.currency)} à ${money(after.amount, platform.currency)} par mois (hors options). Détails dans Abonnement.`,
+        data: {
+          legacyUntil: sub.legacyUntil.toISOString(),
+          before: before.amount,
+          after: after.amount,
+        },
+      },
+    };
   }
 
   /**

@@ -1,3 +1,5 @@
+import type { OnboardingPackage } from './subscription';
+
 /**
  * Contenu du site vitrine, modifiable par l'éditeur depuis sa console : textes, ordre et
  * visibilité des sections, images. Les formules sont lues en direct dans le catalogue.
@@ -177,6 +179,11 @@ export interface LandingPlan {
   includedAgents: number;
   includedLeads: number;
   extraAgentPrice: number;
+  /** Vente en camion : prix d'un camion actif dans le mois (0 = compris) */
+  vanPrice: number;
+  /** IA photo : photos comprises chaque mois, et prix d'un lot de 100 au-delà */
+  photoAiMonthlyQuota: number;
+  photoAiExtraPrice: number;
   features: string[];
 }
 
@@ -186,6 +193,8 @@ export interface PublicLanding {
   currency: string;
   trialDays: number;
   annualDiscountPercent: number;
+  /** Forfaits de mise en place, en option */
+  onboardingPackages: OnboardingPackage[];
 }
 
 export const DemoRequestStatus = {

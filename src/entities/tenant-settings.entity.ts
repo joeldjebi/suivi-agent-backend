@@ -133,6 +133,10 @@ export class TenantSettings {
   @Column({ name: 'photo_ai_auto', default: true })
   photoAiAuto: boolean;
 
+  /** IA photo : continuer au-delà du quota du mois (facturé par lot de 100) */
+  @Column({ name: 'photo_ai_overage', default: false })
+  photoAiOverage: boolean;
+
   @Column({ name: 'position_retention_days' })
   positionRetentionDays: number;
 

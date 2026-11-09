@@ -66,6 +66,17 @@ export interface PhotoAiUsage {
   /** Photos analysées (ou en cours) ce mois-ci */
   used: number;
   remaining: number;
+  /**
+   * Au-delà du quota, les analyses continuent (facturées par lot de 100) : l'administrateur
+   * l'a accepté, la formule a un prix de lot, et ni l'essai ni l'ancien tarif ne s'appliquent.
+   */
+  overage: boolean;
+  /** L'administrateur accepte le dépassement (réglage) */
+  overageAllowed: boolean;
+  /** Prix d'un lot de 100 photos au-delà du quota (0 : pas de dépassement possible) */
+  lotPrice: number;
+  /** Photos au-delà du quota et du supplément ce mois-ci */
+  overQuota: number;
   /** Analyse automatique des photos de rayon */
   auto: boolean;
   /** Une IA est branchée sur la plateforme */
@@ -265,7 +276,7 @@ export class PhotoAiService implements OnApplicationBootstrap, OnModuleDestroy {
     const { features } = await this.subscriptions.summary(tenantId);
     if (!features.includes(Feature.PhotoAi)) return skip('feature');
     const usage = await this.usageOf(tenantId, id);
-    if (usage.remaining <= 0) return skip('quota');
+    if (usage.remaining <= 0 && !usage.overage) return skip('quota');
 
     const [photo] = await m.query<
       {
@@ -443,13 +454,34 @@ export class PhotoAiService implements OnApplicationBootstrap, OnModuleDestroy {
     const month = monthOf();
     const [row] = await this.db.runAsSystem(() =>
       this.db.manager.query<
-        { quota: number; bonus: number; used: number; auto: boolean }[]
+        {
+          quota: number;
+          bonus: number;
+          used: number;
+          auto: boolean;
+          overageAllowed: boolean;
+          lotPrice: number;
+        }[]
       >(
-        `SELECT coalesce((SELECT p.photo_ai_monthly_quota FROM subscriptions s
-                            CROSS JOIN platform_settings ps
-                            JOIN plans p ON p.code = CASE WHEN s.status = 'trialing'
-                                                          THEN ps.trial_plan_code ELSE s.plan_code END
-                          WHERE s.tenant_id = $1), 0)::int AS quota,
+        // Quota : formule d'essai pendant l'essai, ancien tarif tant qu'il est garanti.
+        // Lot : seulement hors essai et hors ancien tarif (rien de facturé sinon).
+        `WITH s AS (
+           SELECT s.status, s.legacy_until > now() AS legacy, s.legacy_photo_ai_quota,
+                  p.photo_ai_monthly_quota AS quota, own.photo_ai_extra_price AS lot
+           FROM subscriptions s
+           CROSS JOIN platform_settings ps
+           JOIN plans p ON p.code = CASE WHEN s.status = 'trialing'
+                                         THEN ps.trial_plan_code ELSE s.plan_code END
+           JOIN plans own ON own.code = s.plan_code
+           WHERE s.tenant_id = $1
+         )
+         SELECT coalesce((SELECT CASE WHEN status <> 'trialing' AND legacy IS TRUE
+                                      THEN coalesce(legacy_photo_ai_quota, quota)
+                                      ELSE quota END FROM s), 0)::int AS quota,
+                coalesce((SELECT CASE WHEN status IN ('active', 'past_due') AND legacy IS NOT TRUE
+                                      THEN lot ELSE 0 END FROM s), 0)::int AS "lotPrice",
+                coalesce((SELECT photo_ai_overage FROM tenant_settings WHERE tenant_id = $1), false)
+                  AS "overageAllowed",
                 coalesce((SELECT photos FROM photo_ai_bonuses
                           WHERE tenant_id = $1 AND month = $2), 0)::int AS bonus,
                 (SELECT count(*) FROM photo_analyses
@@ -466,6 +498,10 @@ export class PhotoAiService implements OnApplicationBootstrap, OnModuleDestroy {
       bonus: row.bonus,
       used: row.used,
       remaining: Math.max(0, row.quota + row.bonus - row.used),
+      overage: row.overageAllowed && row.lotPrice > 0,
+      overageAllowed: row.overageAllowed,
+      lotPrice: row.lotPrice,
+      overQuota: Math.max(0, row.used - row.quota - row.bonus),
       auto: row.auto,
       configured: !!(await this.active()),
     };
