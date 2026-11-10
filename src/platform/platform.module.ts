@@ -8,13 +8,18 @@ import {
   PlatformAuthController,
   PlatformController,
 } from './platform.controller';
+import { PlatformSecurityController } from './security.controller';
 import { PlatformService } from './platform.service';
 import { PlatformTenantService } from './platform-tenant.service';
 import { PlatformIpGuard } from './platform-security';
 
 @Module({
   imports: [PassportModule, AuthModule, SubscriptionsModule, PhotosModule],
-  controllers: [PlatformAuthController, PlatformController],
+  controllers: [
+    PlatformAuthController,
+    PlatformController,
+    PlatformSecurityController,
+  ],
   providers: [
     PlatformService,
     PlatformTenantService,

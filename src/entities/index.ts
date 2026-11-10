@@ -15,6 +15,7 @@ import {
 } from './payroll.entity';
 import { PlatformAdmin, PlatformAudit } from './platform.entity';
 import { RefreshToken } from './refresh-token.entity';
+import { SecurityEvent } from './security-event.entity';
 import {
   Invoice,
   OneTimeCharge,
@@ -40,6 +41,7 @@ import { Zone } from './zone.entity';
 export {
   AgentAlert,
   AuditLog,
+  SecurityEvent,
   PlatformAdmin,
   PlatformAudit,
   PayAdjustment,
@@ -76,6 +78,7 @@ export {
 export const ENTITIES = [
   AgentAlert,
   AuditLog,
+  SecurityEvent,
   PlatformAdmin,
   PlatformAudit,
   PayAdjustment,

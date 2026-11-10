@@ -9,6 +9,7 @@ import { DbService } from '../common/db.service';
 import { cleanImage, imageMime } from '../common/image';
 import { normalizePhone } from '../common/phone';
 import { RedisService } from '../common/redis.service';
+import { SecurityEventsService } from '../common/security-events.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import type { PlatformUser } from '../platform/platform-auth';
 import { DEFAULT_LANDING } from './landing.defaults';
@@ -47,6 +48,7 @@ export class LandingService {
     private readonly db: DbService,
     private readonly subscriptions: SubscriptionsService,
     private readonly redis: RedisService,
+    private readonly security: SecurityEventsService,
   ) {}
 
   private async row(): Promise<LandingRow> {
@@ -121,8 +123,16 @@ export class LandingService {
 
   /** Demande de démo : champ piège contre les robots, 5 demandes par heure et par adresse. */
   async requestDemo(dto: DemoRequestDto, ip: string) {
-    // Robot : on répond comme si tout allait bien, sans rien enregistrer.
-    if (dto.website?.trim()) return { received: true };
+    // Robot : on répond comme si tout allait bien, sans créer de demande — mais on le trace.
+    if (dto.website?.trim()) {
+      this.security.record({
+        type: 'honeypot',
+        ip,
+        path: '/public/demo-requests',
+        details: { field: 'website' },
+      });
+      return { received: true };
+    }
     const key = `demo:ip:${ip}`;
     const count = await this.redis.client.incr(key);
     if (count === 1) await this.redis.client.expire(key, 3600);

@@ -2,6 +2,7 @@ import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
 import { REQUIRES_CAPTCHA } from './decorators';
+import { SecurityEventsService } from './security-events.service';
 import { TurnstileService } from './turnstile.service';
 
 /**
@@ -14,6 +15,7 @@ export class TurnstileGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly turnstile: TurnstileService,
+    private readonly security: SecurityEventsService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -26,7 +28,18 @@ export class TurnstileGuard implements CanActivate {
     const req = context.switchToHttp().getRequest<Request>();
     const header = req.headers['x-captcha-token'];
     const token = Array.isArray(header) ? header[0] : header;
-    await this.turnstile.verify(token, req.ip);
+    try {
+      await this.turnstile.verify(token, req.ip);
+    } catch (error) {
+      this.security.record({
+        type: 'captcha_failed',
+        ip: req.ip ?? null,
+        path: req.originalUrl,
+        userAgent: req.headers['user-agent'] ?? null,
+        details: { hadToken: !!token },
+      });
+      throw error;
+    }
     return true;
   }
 }

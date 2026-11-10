@@ -1,6 +1,7 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { BusinessException } from './business.exception';
 import { RedisService } from './redis.service';
+import { SecurityEventsService } from './security-events.service';
 
 /** Fenêtre de comptage des échecs de connexion. */
 const WINDOW_SECONDS = 15 * 60;
@@ -42,7 +43,10 @@ const ACCOUNT_FACTOR = 10;
  */
 @Injectable()
 export class LoginThrottle {
-  constructor(private readonly redis: RedisService) {}
+  constructor(
+    private readonly redis: RedisService,
+    private readonly security: SecurityEventsService,
+  ) {}
 
   private keys(limits: LoginLimits, ip: string, account: string) {
     const name = account.toLowerCase();
@@ -75,6 +79,12 @@ export class LoginThrottle {
     if (!blocked) return;
     const ttl = await this.redis.client.ttl(blocked);
     const minutes = Math.max(1, Math.ceil(ttl / 60));
+    this.security.record({
+      type: 'login_locked',
+      ip,
+      target: account,
+      details: { space: limits.prefix, scope: blocked.split(':')[2] },
+    });
     throw new BusinessException(
       HttpStatus.TOO_MANY_REQUESTS,
       'TOO_MANY_ATTEMPTS',
@@ -84,6 +94,12 @@ export class LoginThrottle {
   }
 
   async fail(limits: LoginLimits, ip: string, account: string): Promise<void> {
+    this.security.record({
+      type: 'login_failed',
+      ip,
+      target: account,
+      details: { space: limits.prefix },
+    });
     const keys = this.keys(limits, ip, account);
     await this.redis.client
       .multi()

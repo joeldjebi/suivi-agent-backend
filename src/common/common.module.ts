@@ -9,6 +9,7 @@ import { RealtimeService } from './realtime.service';
 import { LoginThrottle } from './login-throttle';
 import { RedisService } from './redis.service';
 import { SessionRevocationService } from './session-revocation.service';
+import { SecurityEventsService } from './security-events.service';
 import { TurnstileService } from './turnstile.service';
 import { ZoneExitsService } from './zone-exits.service';
 
@@ -25,6 +26,7 @@ import { ZoneExitsService } from './zone-exits.service';
     PushService,
     RealtimeService,
     RedisService,
+    SecurityEventsService,
     TurnstileService,
     ZoneExitsService,
   ],
@@ -39,6 +41,7 @@ import { ZoneExitsService } from './zone-exits.service';
     PushService,
     RealtimeService,
     RedisService,
+    SecurityEventsService,
     TurnstileService,
     ZoneExitsService,
   ],

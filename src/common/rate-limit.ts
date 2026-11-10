@@ -11,6 +11,7 @@ import { JwtService } from '@nestjs/jwt';
 import type { Request } from 'express';
 import { BusinessException } from './business.exception';
 import { RedisService } from './redis.service';
+import { SecurityEventsService } from './security-events.service';
 
 const RATE_LIMIT_KEY = 'rateLimit';
 
@@ -52,6 +53,7 @@ export class RateLimitGuard implements CanActivate {
     private readonly reflector: Reflector,
     private readonly redis: RedisService,
     private readonly config: ConfigService,
+    private readonly security: SecurityEventsService,
   ) {}
 
   /** Utilisateur du jeton d'accès, s'il est valide (signature et date) ; sinon null. */
@@ -109,6 +111,14 @@ export class RateLimitGuard implements CanActivate {
         const retryAfter =
           check.windowSeconds -
           (Math.floor(Date.now() / 1000) % check.windowSeconds);
+        this.security.record({
+          type: 'rate_limited',
+          ip,
+          target: user ?? null,
+          path: req.originalUrl,
+          userAgent: req.headers['user-agent'] ?? null,
+          details: { scope: check.name, limit: check.limit },
+        });
         throw new BusinessException(
           HttpStatus.TOO_MANY_REQUESTS,
           'TOO_MANY_REQUESTS',

@@ -5,6 +5,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { DayEndReason, Feature, ZoneRequestStatus } from '@suivi/shared';
 import { In } from 'typeorm';
 import { DbService } from '../common/db.service';
+import { SecurityEventsService } from '../common/security-events.service';
 import { AlertsService } from '../common/alerts.service';
 import { NotificationsService } from '../common/notifications.service';
 import { ReportsService } from '../reports/reports.service';
@@ -42,7 +43,15 @@ export class JobsService {
     private readonly reports: ReportsService,
     private readonly outlets: OutletsService,
     private readonly transfers: TransfersService,
+    private readonly security: SecurityEventsService,
   ) {}
+
+  /** Chaque jour : purge des événements de sécurité de plus de 90 jours. */
+  @Cron(CronExpression.EVERY_DAY_AT_3AM)
+  async purgeSecurityEvents() {
+    const deleted = await this.security.purge(90);
+    if (deleted) this.logger.log(`${deleted} événements de sécurité purgés`);
+  }
 
   /**
    * Toutes les minutes : demandes en attente puis remise à zéro quotidienne. Un passage à la

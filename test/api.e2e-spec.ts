@@ -13438,3 +13438,84 @@ describe('Validation des inscriptions par l’éditeur', () => {
     await t.admin.api.get('/zones').expect(200);
   });
 });
+
+describe('Journal de sécurité (éditeur) — attaques sur la plateforme', () => {
+  const sa = async (): Promise<Api> => {
+    const email = uniqueEmail('sa-secu');
+    await owner.query(
+      `INSERT INTO platform_admins (email, password_hash, first_name, last_name) VALUES ($1, $2, 'Sec', 'Ops')`,
+      [email, await hashPassword('Editeur2026!')],
+    );
+    const token = (
+      (
+        await new Api(app)
+          .post('/platform/auth/login', { email, password: 'Editeur2026!' })
+          .expect(200)
+      ).body as { accessToken: string }
+    ).accessToken;
+    return new Api(app, token);
+  };
+
+  // L'enregistrement est « tire et oublie » : on attend qu'il apparaisse (jusqu'à ~3 s).
+  const waitFor = async (
+    api: Api,
+    qs: string,
+    predicate: (items: Body[]) => boolean,
+  ): Promise<Body[]> => {
+    for (let i = 0; i < 30; i++) {
+      const body = (await api.get(`/platform/security-events${qs}`).expect(200))
+        .body as { items: Body[] };
+      if (predicate(body.items)) return body.items;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    throw new Error(`Événement attendu absent : ${qs}`);
+  };
+
+  it('un mot de passe refusé est journalisé et visible par l’éditeur', async () => {
+    const t = await newTenant(app);
+    const editor = await sa();
+    await new Api(app)
+      .post('/auth/login', { email: t.admin.email, password: 'MauvaisMdp!' })
+      .expect(401);
+    const items = await waitFor(
+      editor,
+      `?type=login_failed&search=${encodeURIComponent(t.admin.email)}`,
+      (xs) => xs.length > 0,
+    );
+    expect(items[0]).toMatchObject({
+      type: 'login_failed',
+      target: t.admin.email,
+    });
+    expect(items[0].ip).toBeDefined();
+  });
+
+  it('le piège à robots du formulaire de démo est journalisé', async () => {
+    const editor = await sa();
+    await new Api(app)
+      .post('/public/demo-requests', {
+        name: 'Robot',
+        organization: 'Spam SARL',
+        email: 'robot@spam.test',
+        phone: '0700000000',
+        website: 'http://spam',
+      })
+      .expect(201);
+    const items = await waitFor(editor, '?type=honeypot', (xs) => xs.length > 0);
+    expect(items[0]).toMatchObject({ type: 'honeypot' });
+  });
+
+  it('le résumé compte les événements par type', async () => {
+    const editor = await sa();
+    const summary = (
+      await editor.get('/platform/security-events/summary').expect(200)
+    ).body as { byType: { type: string; last7d: number }[] };
+    const failed = summary.byType.find((r) => r.type === 'login_failed');
+    expect(failed && failed.last7d).toBeGreaterThan(0);
+  });
+
+  it('réservé à l’éditeur : une structure ne voit pas le journal', async () => {
+    const t = await newTenant(app);
+    await t.admin.api.get('/platform/security-events').expect(401);
+    await new Api(app).get('/platform/security-events').expect(401);
+  });
+});
