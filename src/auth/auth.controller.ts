@@ -14,7 +14,12 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import type { AuthUser } from '../common/auth-user';
-import { AllowWhenSuspended, CurrentUser, Public } from '../common/decorators';
+import {
+  AllowWhenSuspended,
+  CurrentUser,
+  Public,
+  RequiresCaptcha,
+} from '../common/decorators';
 import {
   ChangePasswordDto,
   UpdateProfileDto,
@@ -36,12 +41,19 @@ export class AuthController {
   @Public()
   // Création de structures en série (essais gratuits) : 5 par heure et par adresse IP.
   @RateLimit(5, 3600)
+  @RequiresCaptcha()
   @Post('register')
   register(@Body() dto: RegisterDto): Promise<TokensDto> {
     return this.auth.register(dto);
   }
 
   @Public()
+  // En plus du verrouillage par compte (5 échecs → 15 min), un plafond par adresse IP
+  // arrête le balayage de mots de passe sur de nombreux comptes et l'énumération depuis une
+  // même source. Plafond large par défaut (60/min) : les agents de terrain partagent souvent
+  // une même adresse chez l'opérateur (CGNAT), on ne bloque jamais la connexion du matin
+  // d'une équipe. Réglable par LOGIN_RATE_LIMIT_PER_MINUTE sans toucher au code.
+  @RateLimit(Number(process.env.LOGIN_RATE_LIMIT_PER_MINUTE) || 60, 60)
   @Post('login')
   @HttpCode(200)
   login(@Body() dto: LoginDto, @Ip() ip: string): Promise<TokensDto> {

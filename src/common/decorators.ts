@@ -21,6 +21,11 @@ export const RequiresFeature = (...features: Feature[]) =>
   SetMetadata(REQUIRES_FEATURE, features);
 export const Roles = (...roles: Role[]) => SetMetadata(ROLES, roles);
 
+export const REQUIRES_CAPTCHA = 'requiresCaptcha';
+/** Route publique sensible aux robots : exige un jeton Turnstile valide si le CAPTCHA est
+ * configuré (sans clé, sans effet). Le jeton arrive dans l'en-tête `x-captcha-token`. */
+export const RequiresCaptcha = () => SetMetadata(REQUIRES_CAPTCHA, true);
+
 export const CurrentUser = createParamDecorator(
   (_data: unknown, context: ExecutionContext) =>
     context.switchToHttp().getRequest<Request>().user as AuthUser,

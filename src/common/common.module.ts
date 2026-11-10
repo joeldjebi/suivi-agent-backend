@@ -9,6 +9,7 @@ import { RealtimeService } from './realtime.service';
 import { LoginThrottle } from './login-throttle';
 import { RedisService } from './redis.service';
 import { SessionRevocationService } from './session-revocation.service';
+import { TurnstileService } from './turnstile.service';
 import { ZoneExitsService } from './zone-exits.service';
 
 @Global()
@@ -24,6 +25,7 @@ import { ZoneExitsService } from './zone-exits.service';
     PushService,
     RealtimeService,
     RedisService,
+    TurnstileService,
     ZoneExitsService,
   ],
   exports: [
@@ -37,6 +39,7 @@ import { ZoneExitsService } from './zone-exits.service';
     PushService,
     RealtimeService,
     RedisService,
+    TurnstileService,
     ZoneExitsService,
   ],
 })

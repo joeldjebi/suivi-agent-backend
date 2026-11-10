@@ -20,7 +20,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiConsumes, ApiExcludeController, ApiTags } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
-import { Public } from '../common/decorators';
+import { Public, RequiresCaptcha } from '../common/decorators';
 import {
   CurrentAdmin,
   PlatformRoute,
@@ -63,6 +63,7 @@ export class PublicLandingController {
   }
 
   @Post('demo-requests')
+  @RequiresCaptcha()
   @HttpCode(201)
   requestDemo(@Body() dto: DemoRequestDto, @Req() req: Request) {
     return this.landing.requestDemo(dto, clientIp(req));

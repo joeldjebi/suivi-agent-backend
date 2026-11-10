@@ -59,6 +59,7 @@ import { UsersModule } from './users/users.module';
 import { ZoneRequestsModule } from './zone-requests/zone-requests.module';
 import { ZonesModule } from './zones/zones.module';
 import { RateLimitGuard } from './common/rate-limit';
+import { TurnstileGuard } from './common/turnstile.guard';
 
 @Module({
   imports: [
@@ -130,6 +131,8 @@ import { RateLimitGuard } from './common/rate-limit';
     // Avant tout : une app trop ancienne est invitée à se mettre à jour.
     // Robots et scripts : plafond de requêtes par adresse IP, avant tout le reste.
     { provide: APP_GUARD, useClass: RateLimitGuard },
+    // Inscription et demande de démo : jeton anti-robot Turnstile (sans effet si non configuré).
+    { provide: APP_GUARD, useClass: TurnstileGuard },
     { provide: APP_GUARD, useExisting: AppVersionGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
