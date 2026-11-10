@@ -5,7 +5,9 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { initMonitoring } from './common/monitoring';
+import { scanDetection } from './common/scan-detection';
 import { assertSecureConfig } from './common/secure-config';
+import { SecurityEventsService } from './common/security-events.service';
 
 async function bootstrap() {
   // Refuse de démarrer en production si un réglage de sécurité manque (CORS, secrets).
@@ -33,6 +35,8 @@ async function bootstrap() {
       hsts: false,
     }),
   );
+  // Scans de robots (/.env, /wp-login.php…) : journalisés puis 404, avant tout le reste.
+  app.use(scanDetection(app.get(SecurityEventsService)));
   app.setGlobalPrefix('api');
   app.enableCors({ origin: process.env.CORS_ORIGIN?.split(',') ?? true });
   app.useGlobalPipes(

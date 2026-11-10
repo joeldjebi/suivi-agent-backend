@@ -5,6 +5,7 @@ export const SecurityEventType = {
   RateLimited: 'rate_limited',
   CaptchaFailed: 'captcha_failed',
   Honeypot: 'honeypot',
+  PathScan: 'path_scan',
 } as const
 export type SecurityEventType =
   (typeof SecurityEventType)[keyof typeof SecurityEventType]
@@ -15,6 +16,7 @@ export const SECURITY_EVENT_TYPE_LABELS: Record<SecurityEventType, string> = {
   rate_limited: 'Trop de requêtes',
   captcha_failed: 'Échec du CAPTCHA',
   honeypot: 'Robot (piège)',
+  path_scan: 'Scan de chemins',
 }
 
 /** Courte explication de chaque type, pour l'info-bulle de la console. */
@@ -25,4 +27,6 @@ export const SECURITY_EVENT_TYPE_HINTS: Record<SecurityEventType, string> = {
   rate_limited: 'Une adresse a dépassé le plafond de requêtes autorisé.',
   captcha_failed: 'La vérification anti-robot a échoué (jeton absent ou invalide).',
   honeypot: 'Le piège du formulaire de démo a été déclenché (robot).',
+  path_scan:
+    'Un robot sonde des chemins sensibles connus (/.env, /wp-login.php…) à la recherche d’une faille.',
 }
