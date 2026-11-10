@@ -35,6 +35,8 @@ export class TurnstileGuard implements CanActivate {
         type: 'captcha_failed',
         ip: req.ip ?? null,
         path: req.originalUrl,
+        method: req.method,
+        referer: req.headers['referer'] ?? null,
         userAgent: req.headers['user-agent'] ?? null,
         details: { hadToken: !!token },
       });

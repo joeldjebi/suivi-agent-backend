@@ -122,13 +122,20 @@ export class LandingService {
   }
 
   /** Demande de démo : champ piège contre les robots, 5 demandes par heure et par adresse. */
-  async requestDemo(dto: DemoRequestDto, ip: string) {
+  async requestDemo(
+    dto: DemoRequestDto,
+    ip: string,
+    meta: { userAgent?: string; referer?: string } = {},
+  ) {
     // Robot : on répond comme si tout allait bien, sans créer de demande — mais on le trace.
     if (dto.website?.trim()) {
       this.security.record({
         type: 'honeypot',
         ip,
         path: '/public/demo-requests',
+        method: 'POST',
+        userAgent: meta.userAgent ?? null,
+        referer: meta.referer ?? null,
         details: { field: 'website' },
       });
       return { received: true };

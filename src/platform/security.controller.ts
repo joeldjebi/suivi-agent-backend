@@ -1,8 +1,14 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  NotFoundException,
+  Param,
+  Query,
+} from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { SecurityEventsService } from '../common/security-events.service';
 import { PlatformRoute } from './platform-auth';
-import { SecurityEventsQueryDto } from './platform.dto';
+import { AttackersQueryDto, SecurityEventsQueryDto } from './platform.dto';
 
 /**
  * Journal de sécurité réservé à l'éditeur : les « attaques » sur la plateforme (connexions
@@ -18,6 +24,20 @@ export class PlatformSecurityController {
   @Get('security-events/summary')
   summary() {
     return this.security.summary();
+  }
+
+  /** Attaquants regroupés par adresse IP (nombre, types, période, cibles, géolocalisation). */
+  @Get('security-events/attackers')
+  attackers(@Query() query: AttackersQueryDto) {
+    return this.security.attackers(query);
+  }
+
+  /** Détail d'un événement (user-agent, chemin, referer, détails, géolocalisation de l'IP). */
+  @Get('security-events/:id')
+  async detail(@Param('id') id: string) {
+    const event = await this.security.detail(id);
+    if (!event) throw new NotFoundException();
+    return event;
   }
 
   /** Liste filtrable des événements, la plus récente d'abord. */

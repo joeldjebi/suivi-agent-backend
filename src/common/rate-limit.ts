@@ -116,6 +116,8 @@ export class RateLimitGuard implements CanActivate {
           ip,
           target: user ?? null,
           path: req.originalUrl,
+          method: req.method,
+          referer: req.headers['referer'] ?? null,
           userAgent: req.headers['user-agent'] ?? null,
           details: { scope: check.name, limit: check.limit },
         });

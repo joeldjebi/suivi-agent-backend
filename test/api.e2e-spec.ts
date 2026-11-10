@@ -13500,7 +13500,11 @@ describe('Journal de sécurité (éditeur) — attaques sur la plateforme', () =
         website: 'http://spam',
       })
       .expect(201);
-    const items = await waitFor(editor, '?type=honeypot', (xs) => xs.length > 0);
+    const items = await waitFor(
+      editor,
+      '?type=honeypot',
+      (xs) => xs.length > 0,
+    );
     expect(items[0]).toMatchObject({ type: 'honeypot' });
   });
 
@@ -13513,9 +13517,64 @@ describe('Journal de sécurité (éditeur) — attaques sur la plateforme', () =
     expect(failed && failed.last7d).toBeGreaterThan(0);
   });
 
+  it('détail d’un événement : chemin, méthode et user-agent conservés', async () => {
+    const t = await newTenant(app);
+    const editor = await sa();
+    await new Api(app)
+      .post('/auth/login', { email: t.admin.email, password: 'Encore!Faux1' })
+      .set('User-Agent', 'RobotTest/1.0')
+      .expect(401);
+    const items = await waitFor(
+      editor,
+      `?type=login_failed&search=${encodeURIComponent(t.admin.email)}`,
+      (xs) => xs.length > 0,
+    );
+    const detail = (
+      await editor.get(`/platform/security-events/${items[0].id}`).expect(200)
+    ).body as Body;
+    expect(detail).toMatchObject({
+      type: 'login_failed',
+      method: 'POST',
+      path: '/auth/login',
+      userAgent: 'RobotTest/1.0',
+    });
+    // Sans jeton ipinfo en test, la géolocalisation est absente (pas d'appel externe).
+    expect(detail.intel ?? null).toBeNull();
+    await editor.get('/platform/security-events/999999999').expect(404);
+  });
+
+  it('vue « attaquants » : regroupe par IP, compte et types', async () => {
+    const t = await newTenant(app);
+    const editor = await sa();
+    for (let i = 0; i < 3; i++)
+      await new Api(app)
+        .post('/auth/login', { phone: t.admin.email, password: 'NonNon123' })
+        .set('X-Forwarded-For', '198.51.100.77')
+        .expect(401);
+    const body = await (async () => {
+      for (let i = 0; i < 30; i++) {
+        const b = (
+          await editor
+            .get('/platform/security-events/attackers?days=1')
+            .expect(200)
+        ).body as {
+          items: Body[];
+        };
+        const hit = b.items.find((a) => a.ip === '198.51.100.77');
+        if (hit) return hit;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      throw new Error('attaquant absent');
+    })();
+    expect(body.count).toBeGreaterThanOrEqual(3);
+    expect(body.types).toContain('login_failed');
+    expect(body.firstSeen).toBeDefined();
+  });
+
   it('réservé à l’éditeur : une structure ne voit pas le journal', async () => {
     const t = await newTenant(app);
     await t.admin.api.get('/platform/security-events').expect(401);
     await new Api(app).get('/platform/security-events').expect(401);
+    await t.admin.api.get('/platform/security-events/attackers').expect(401);
   });
 });

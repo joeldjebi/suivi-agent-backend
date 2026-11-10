@@ -15,6 +15,7 @@ import {
 } from './payroll.entity';
 import { PlatformAdmin, PlatformAudit } from './platform.entity';
 import { RefreshToken } from './refresh-token.entity';
+import { IpIntel } from './ip-intel.entity';
 import { SecurityEvent } from './security-event.entity';
 import {
   Invoice,
@@ -42,6 +43,7 @@ export {
   AgentAlert,
   AuditLog,
   SecurityEvent,
+  IpIntel,
   PlatformAdmin,
   PlatformAudit,
   PayAdjustment,
@@ -79,6 +81,7 @@ export const ENTITIES = [
   AgentAlert,
   AuditLog,
   SecurityEvent,
+  IpIntel,
   PlatformAdmin,
   PlatformAudit,
   PayAdjustment,

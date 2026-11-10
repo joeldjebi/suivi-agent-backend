@@ -26,6 +26,12 @@ export class SecurityEvent {
   @Column({ type: 'text', nullable: true })
   path: string | null;
 
+  @Column({ type: 'text', nullable: true })
+  method: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  referer: string | null;
+
   @Column({ name: 'user_agent', type: 'text', nullable: true })
   userAgent: string | null;
 

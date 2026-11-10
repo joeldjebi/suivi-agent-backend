@@ -742,3 +742,26 @@ export class SecurityEventsQueryDto {
   @Max(200)
   limit?: number;
 }
+
+/** Filtres de la vue « attaquants » (regroupée par IP). */
+export class AttackersQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(90)
+  days?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit?: number;
+}

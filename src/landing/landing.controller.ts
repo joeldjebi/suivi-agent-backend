@@ -66,7 +66,10 @@ export class PublicLandingController {
   @RequiresCaptcha()
   @HttpCode(201)
   requestDemo(@Body() dto: DemoRequestDto, @Req() req: Request) {
-    return this.landing.requestDemo(dto, clientIp(req));
+    return this.landing.requestDemo(dto, clientIp(req), {
+      userAgent: req.headers['user-agent'],
+      referer: req.headers['referer'],
+    });
   }
 }
 

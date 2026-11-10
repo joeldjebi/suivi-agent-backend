@@ -82,7 +82,11 @@ export class PlatformAuthController {
   @Post('login')
   @HttpCode(200)
   login(@Body() dto: PlatformLoginDto, @Req() req: Request) {
-    return this.platform.login(dto, clientIp(req));
+    return this.platform.login(dto, clientIp(req), {
+      userAgent: req.headers['user-agent'],
+      referer: req.headers['referer'],
+      path: '/platform/auth/login',
+    });
   }
 
   /** Deuxième étape de connexion, quand la double authentification est active. */

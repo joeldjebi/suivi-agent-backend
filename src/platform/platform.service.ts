@@ -73,7 +73,11 @@ import {
   UpdateTenantDto,
 } from './platform.dto';
 import * as QRCode from 'qrcode';
-import { LoginThrottle, PLATFORM_LOGIN } from '../common/login-throttle';
+import {
+  LoginMeta,
+  LoginThrottle,
+  PLATFORM_LOGIN,
+} from '../common/login-throttle';
 import { PhotoAiService } from '../photo-ai/photo-ai.service';
 import { PlatformTenantService } from './platform-tenant.service';
 import {
@@ -654,10 +658,10 @@ export class PlatformService {
 
   // ------------------------------------------------------- authentification
 
-  async login(dto: PlatformLoginDto, ip = '') {
+  async login(dto: PlatformLoginDto, ip = '', meta: LoginMeta = {}) {
     const m = this.db.manager;
     // Verrouillage avant toute vérification : le bon mot de passe ne passe plus non plus.
-    await this.throttle.assertAllowed(PLATFORM_LOGIN, ip, dto.email);
+    await this.throttle.assertAllowed(PLATFORM_LOGIN, ip, dto.email, meta);
     const admin = await m
       .createQueryBuilder(PlatformAdmin, 'a')
       .addSelect('a.passwordHash')
@@ -678,7 +682,7 @@ export class PlatformService {
           ip,
         ),
       );
-      await this.throttle.fail(PLATFORM_LOGIN, ip, dto.email);
+      await this.throttle.fail(PLATFORM_LOGIN, ip, dto.email, meta);
       throw invalidCredentials();
     }
     // Double authentification : le mot de passe seul n'ouvre pas la session.

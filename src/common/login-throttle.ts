@@ -33,6 +33,13 @@ export const APP_LOGIN: LoginLimits = {
 /** Échecs tolérés pour un compte toutes adresses IP confondues (attaque répartie). */
 const ACCOUNT_FACTOR = 10;
 
+/** Contexte de la requête de connexion, pour enrichir le journal de sécurité. */
+export interface LoginMeta {
+  userAgent?: string;
+  referer?: string;
+  path?: string;
+}
+
 /**
  * Protection contre les essais de mots de passe, en 15 minutes :
  * - un compte depuis une même adresse IP : au-delà du seuil, cette adresse ne peut plus s'y
@@ -61,6 +68,7 @@ export class LoginThrottle {
     limits: LoginLimits,
     ip: string,
     account: string,
+    meta: LoginMeta = {},
   ): Promise<void> {
     const keys = this.keys(limits, ip, account);
     const [byAccountIp, byAccount, byIp] = await this.redis.client.mget(
@@ -83,6 +91,10 @@ export class LoginThrottle {
       type: 'login_locked',
       ip,
       target: account,
+      method: 'POST',
+      path: meta.path ?? null,
+      userAgent: meta.userAgent ?? null,
+      referer: meta.referer ?? null,
       details: { space: limits.prefix, scope: blocked.split(':')[2] },
     });
     throw new BusinessException(
@@ -93,11 +105,20 @@ export class LoginThrottle {
     );
   }
 
-  async fail(limits: LoginLimits, ip: string, account: string): Promise<void> {
+  async fail(
+    limits: LoginLimits,
+    ip: string,
+    account: string,
+    meta: LoginMeta = {},
+  ): Promise<void> {
     this.security.record({
       type: 'login_failed',
       ip,
       target: account,
+      method: 'POST',
+      path: meta.path ?? null,
+      userAgent: meta.userAgent ?? null,
+      referer: meta.referer ?? null,
       details: { space: limits.prefix },
     });
     const keys = this.keys(limits, ip, account);

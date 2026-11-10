@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   HttpCode,
   Ip,
   Patch,
@@ -56,8 +57,17 @@ export class AuthController {
   @RateLimit(Number(process.env.LOGIN_RATE_LIMIT_PER_MINUTE) || 60, 60)
   @Post('login')
   @HttpCode(200)
-  login(@Body() dto: LoginDto, @Ip() ip: string): Promise<TokensDto> {
-    return this.auth.login(dto, ip);
+  login(
+    @Body() dto: LoginDto,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent?: string,
+    @Headers('referer') referer?: string,
+  ): Promise<TokensDto> {
+    return this.auth.login(dto, ip, {
+      userAgent,
+      referer,
+      path: '/auth/login',
+    });
   }
 
   @Public()

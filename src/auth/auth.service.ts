@@ -11,7 +11,7 @@ import {
   badRequest,
   conflict,
 } from '../common/business.exception';
-import { APP_LOGIN, LoginThrottle } from '../common/login-throttle';
+import { APP_LOGIN, LoginMeta, LoginThrottle } from '../common/login-throttle';
 import { DbService } from '../common/db.service';
 import { RedisService } from '../common/redis.service';
 import { effectiveSettings } from '../common/access.service';
@@ -138,7 +138,11 @@ export class AuthService {
     return admin;
   }
 
-  async login(dto: LoginDto, ip?: string): Promise<TokensDto> {
+  async login(
+    dto: LoginDto,
+    ip?: string,
+    meta: LoginMeta = {},
+  ): Promise<TokensDto> {
     const m = this.db.manager;
     const qb = m.createQueryBuilder(User, 'u').addSelect('u.passwordHash');
     const phone = dto.phone ? normalizePhone(dto.phone) : null;
@@ -149,7 +153,7 @@ export class AuthService {
     }
     // Essais de mots de passe : compte verrouillé 15 minutes après 5 échecs.
     const account = phone ?? dto.phone ?? dto.email ?? '';
-    await this.throttle.assertAllowed(APP_LOGIN, ip ?? '', account);
+    await this.throttle.assertAllowed(APP_LOGIN, ip ?? '', account, meta);
     const user = await qb.getOne();
 
     const valid =
@@ -165,7 +169,7 @@ export class AuthService {
     if (!valid) {
       // Transaction séparée : celle de la requête est annulée par l'erreur.
       await this.db.runAsSystem(() => this.db.manager.insert(AuditLog, entry));
-      await this.throttle.fail(APP_LOGIN, ip ?? '', account);
+      await this.throttle.fail(APP_LOGIN, ip ?? '', account, meta);
       throw invalidCredentials();
     }
     await this.throttle.reset(APP_LOGIN, account, ip ?? '');
