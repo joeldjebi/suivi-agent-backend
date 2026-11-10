@@ -85,16 +85,22 @@ export class AuthService {
    */
   async createTenant(
     dto: RegisterDto & { contactPhone?: string | null },
+    opts: { approved?: boolean } = {},
   ): Promise<User> {
     const m = this.db.manager;
     await this.assertEmailFree(dto.email);
 
+    // Inscription publique : structure « en attente » de validation par l'éditeur, essai pas
+    // encore lancé. Création par l'éditeur : validée d'office, essai lancé tout de suite.
+    const approved = opts.approved ?? false;
     const tenant = await m.save(Tenant, {
       name: dto.organizationName,
       contactPhone: dto.contactPhone ?? null,
+      approvalStatus: approved ? 'approved' : 'pending',
+      approvedAt: approved ? new Date() : null,
     });
     await m.insert(TenantSettings, { tenantId: tenant.id });
-    await this.subscriptions.startTrial(tenant.id);
+    await this.subscriptions.startTrial(tenant.id, approved);
     await m.query(`INSERT INTO tenant_branding (tenant_id) VALUES ($1)`, [
       tenant.id,
     ]);

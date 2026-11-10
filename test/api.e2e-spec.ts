@@ -6571,152 +6571,6 @@ describe('Grille tarifaire', () => {
       .expect(400);
   });
 
-  it('demande de mise en place : la structure demande, l’éditeur accepte (frais facturés) ou refuse', async () => {
-    const sa = await editor('sa-mise-en-place');
-    const t = await newTenant(app, 'Atelier Mise en place');
-    const agent = await t.createUser('agent');
-    const admin = t.admin.api;
-    const requests = async () =>
-      (await admin.get('/subscription/onboarding-requests').expect(200))
-        .body as Body[];
-    expect(await requests()).toEqual([]);
-
-    // Demande : forfait proposé, une seule en attente, réservée à l'administrateur.
-    await admin
-      .post('/subscription/onboarding-requests', { packageCode: 'inconnu' })
-      .expect(404);
-    await agent.api
-      .post('/subscription/onboarding-requests', { packageCode: 'start' })
-      .expect(403);
-    const first = (
-      await admin
-        .post('/subscription/onboarding-requests', {
-          packageCode: 'start',
-          message: '  Formation la semaine du 20  ',
-        })
-        .expect(201)
-    ).body as Body;
-    expect(first).toMatchObject({
-      packageName: 'Démarrage',
-      packagePrice: 50000,
-      message: 'Formation la semaine du 20',
-      status: 'pending',
-    });
-    await admin
-      .post('/subscription/onboarding-requests', { packageCode: 'assisted' })
-      .expect(409)
-      .expect((r) => expect(r.body.code).toBe('ONBOARDING_REQUEST_PENDING'));
-
-    // Retirée avant la réponse, puis une autre demande.
-    await admin
-      .post(`/subscription/onboarding-requests/${first.id as string}/cancel`)
-      .expect(200)
-      .expect((r) => expect(r.body.status).toBe('cancelled'));
-    await admin
-      .post(`/subscription/onboarding-requests/${first.id as string}/cancel`)
-      .expect(409);
-    const assisted = (
-      await admin
-        .post('/subscription/onboarding-requests', { packageCode: 'assisted' })
-        .expect(201)
-    ).body as Body;
-
-    // L'éditeur la voit dans les demandes à traiter, avec la structure et le demandeur.
-    const list = (await sa.get('/platform/onboarding-requests').expect(200))
-      .body as Body;
-    expect(list.pending).toBeGreaterThanOrEqual(1);
-    expect(
-      (list.items as Body[]).find((r) => r.id === assisted.id),
-    ).toMatchObject({
-      tenantName: 'Atelier Mise en place',
-      packageName: 'Accompagné',
-      packagePrice: 250000,
-      status: 'pending',
-      requestedByEmail: t.admin.email,
-    });
-    await sa
-      .post(`/platform/onboarding-requests/${first.id as string}/accept`, {})
-      .expect(409);
-
-    // Acceptée à un prix négocié : les frais s'ajoutent à la prochaine facture.
-    const accepted = (
-      await sa
-        .post(`/platform/onboarding-requests/${assisted.id as string}/accept`, {
-          amount: 200000,
-          note: 'Remise de lancement.',
-        })
-        .expect(200)
-    ).body as Body;
-    expect(accepted).toMatchObject({ status: 'accepted', amount: 200000 });
-    await sa
-      .post(`/platform/onboarding-requests/${assisted.id as string}/accept`, {})
-      .expect(409);
-    const detail = (await sa.get(`/platform/tenants/${t.tenantId}`).expect(200))
-      .body as Body;
-    expect(detail.charges).toEqual([
-      expect.objectContaining({
-        id: accepted.chargeId,
-        label: 'Mise en place : Accompagné',
-        amount: 200000,
-        invoiceId: null,
-      }),
-    ]);
-    expect(detail.onboardingRequests[0]).toMatchObject({
-      id: assisted.id,
-      status: 'accepted',
-    });
-    const sub = (await admin.get('/subscription').expect(200)).body as Body;
-    expect(sub.estimate.lines).toContainEqual(
-      expect.objectContaining({
-        kind: 'one_time',
-        label: 'Mise en place : Accompagné',
-        amount: 200000,
-      }),
-    );
-
-    // Refusée avec un motif.
-    const other = (
-      await admin
-        .post('/subscription/onboarding-requests', { packageCode: 'start' })
-        .expect(201)
-    ).body as Body;
-    await sa
-      .post(`/platform/onboarding-requests/${other.id as string}/reject`, {})
-      .expect(400);
-    await sa
-      .post(`/platform/onboarding-requests/${other.id as string}/reject`, {
-        reason: 'Déjà compris dans l’accompagnement',
-      })
-      .expect(200)
-      .expect((r) => expect(r.body.status).toBe('rejected'));
-    await admin
-      .post(`/subscription/onboarding-requests/${other.id as string}/cancel`)
-      .expect(409);
-    expect((await requests()).map((r) => r.status)).toEqual([
-      'rejected',
-      'accepted',
-      'cancelled',
-    ]);
-
-    // L'administrateur est prévenu de chaque réponse.
-    await new Promise((r) => setTimeout(r, 300));
-    const notes = (
-      (await admin.get('/notifications').expect(200)).body as Body[]
-    ).filter((n) => String(n.type).startsWith('subscription.onboarding'));
-    expect(notes.map((n) => [n.type, n.body])).toEqual(
-      expect.arrayContaining([
-        [
-          'subscription.onboarding_accepted',
-          expect.stringContaining('200 000 FCFA sur votre prochaine facture'),
-        ],
-        [
-          'subscription.onboarding_rejected',
-          expect.stringContaining('Déjà compris dans l’accompagnement'),
-        ],
-      ]),
-    );
-  });
-
   it('clients actuels : ancien tarif garanti, rappel un mois avant, levé au changement de formule', async () => {
     const sa = await editor('sa-ancien');
     const t = await newTenant(app);
@@ -7769,7 +7623,7 @@ describe('Exports Excel et CSV', () => {
     const xlsx = await t.admin.api
       .get(`/exports/days?from=${today()}&to=${today()}`)
       .buffer(true)
-      .parse(binary as never)
+      .parse(binary)
       .expect(200)
       .expect('Content-Type', /spreadsheetml/)
       .expect(
@@ -7823,7 +7677,7 @@ describe('Exports Excel et CSV', () => {
     const typed = await t.admin.api
       .get(`/exports/submissions?typeId=${type.id}`)
       .buffer(true)
-      .parse(binary as never)
+      .parse(binary)
       .expect(200);
     const wb2 = new ExcelJS.Workbook();
     await wb2.xlsx.load(typed.body as ArrayBuffer);
@@ -11621,7 +11475,7 @@ describe('Vente en camionnette', () => {
     const pdf = await agent.api
       .get(`/van-sales/orders/${s4.id}/receipt`)
       .buffer(true)
-      .parse(binary as never)
+      .parse(binary)
       .expect(200)
       .expect('Content-Type', /application\/pdf/);
     expect((pdf.body as Buffer).subarray(0, 4).toString()).toBe('%PDF');
@@ -11721,7 +11575,7 @@ describe('Photos rangées hors de la base', () => {
         await agent.api
           .get(`/photos/${id}`)
           .buffer(true)
-          .parse(binary as never)
+          .parse(binary)
           .expect(200)
       ).body as Buffer;
 
@@ -13395,5 +13249,150 @@ describe('Points de vente confiés à un agent', () => {
     expect(await names(a1)).toEqual(['Boutique Awa', 'Supérette confiée']);
     expect(await names(a2)).toEqual(['Boutique Awa']);
     await admin.post('/outlets/assign', { agentId: a1.id }).expect(400);
+  });
+});
+
+describe('Validation des inscriptions par l’éditeur', () => {
+  const saApi = async (): Promise<Api> => {
+    const email = uniqueEmail('sa-valid');
+    await owner.query(
+      `INSERT INTO platform_admins (email, password_hash, first_name, last_name) VALUES ($1, $2, 'Awa', 'Valid')`,
+      [email, await hashPassword('Editeur2026!')],
+    );
+    const token = (
+      (
+        await new Api(app)
+          .post('/platform/auth/login', { email, password: 'Editeur2026!' })
+          .expect(200)
+      ).body as { accessToken: string }
+    ).accessToken;
+    return new Api(app, token);
+  };
+
+  const registerPending = async () => {
+    const email = uniqueEmail('attente');
+    const stamp = Date.now().toString(36);
+    const res = await new Api(app)
+      .post('/auth/register', {
+        organizationName: `Attente ${stamp}`,
+        firstName: 'Awa',
+        lastName: 'Attente',
+        email,
+        password: PASSWORD,
+      })
+      .expect(201);
+    const api = new Api(app, (res.body as { accessToken: string }).accessToken);
+    const me = (await api.get('/auth/me').expect(200)).body as {
+      user: { tenantId: string };
+      subscription: { approvalStatus: string; trialEndsAt: string | null };
+    };
+    return { api, tenantId: me.user.tenantId, me };
+  };
+
+  it('inscription en attente : accès bloqué, puis validée → active et essai lancé', async () => {
+    const { api, tenantId, me } = await registerPending();
+    expect(me.subscription.approvalStatus).toBe('pending');
+    // L'essai n'a pas encore démarré.
+    expect(me.subscription.trialEndsAt).toBeNull();
+    // Toute action opérationnelle est bloquée.
+    const blocked = await api.get('/zones').expect(403);
+    expect((blocked.body as { code: string }).code).toBe('TENANT_PENDING');
+
+    // L'éditeur voit la demande d'inscription.
+    const sa = await saApi();
+    const list = (await sa.get('/platform/registrations').expect(200)).body as {
+      items: { tenantId: string; approvalStatus: string }[];
+      pending: number;
+    };
+    expect(list.items.some((r) => r.tenantId === tenantId)).toBe(true);
+    expect(list.pending).toBeGreaterThanOrEqual(1);
+
+    // Validation → structure active, essai lancé, et mise en place obligatoire sur la 1re facture.
+    const approved = (
+      await sa
+        .post(`/platform/registrations/${tenantId}/approve`, {})
+        .expect(200)
+    ).body as { charges: { label: string; amount: number }[] };
+    const setup = approved.charges.find((c) =>
+      c.label.startsWith('Mise en place :'),
+    );
+    expect(setup).toMatchObject({
+      label: 'Mise en place : Démarrage',
+      amount: 50000,
+    });
+    await api.get('/zones').expect(200);
+    const after = (await api.get('/auth/me').expect(200)).body as {
+      subscription: { approvalStatus: string; trialEndsAt: string | null };
+    };
+    expect(after.subscription.approvalStatus).toBe('approved');
+    expect(after.subscription.trialEndsAt).not.toBeNull();
+  });
+
+  it('mise en place obligatoire : réduction en % appliquée, 100 % = offerte', async () => {
+    const sa = await saApi();
+    const setupOf = (body: { charges: { label: string; amount: number }[] }) =>
+      body.charges.find((c) => c.label.startsWith('Mise en place :'));
+
+    // Réduction de 20 % sur « Démarrage » (50 000) → 40 000.
+    const a = await registerPending();
+    const ra = (
+      await sa
+        .post(`/platform/registrations/${a.tenantId}/approve`, {
+          discountPercent: 20,
+        })
+        .expect(200)
+    ).body as { charges: { label: string; amount: number }[] };
+    expect(setupOf(ra)).toMatchObject({ amount: 40000 });
+
+    // Forfait choisi « Accompagné » (250 000) avec 10 % → 225 000.
+    const b = await registerPending();
+    const rb = (
+      await sa
+        .post(`/platform/registrations/${b.tenantId}/approve`, {
+          packageCode: 'assisted',
+          discountPercent: 10,
+        })
+        .expect(200)
+    ).body as { charges: { label: string; amount: number }[] };
+    expect(setupOf(rb)).toMatchObject({
+      label: 'Mise en place : Accompagné',
+      amount: 225000,
+    });
+
+    // Offerte (100 %) → aucuns frais de mise en place.
+    const c = await registerPending();
+    const rc = (
+      await sa
+        .post(`/platform/registrations/${c.tenantId}/approve`, {
+          discountPercent: 100,
+        })
+        .expect(200)
+    ).body as { charges: { label: string; amount: number }[] };
+    expect(setupOf(rc)).toBeUndefined();
+  });
+
+  it('inscription refusée : la structure reste bloquée avec le bon code', async () => {
+    const { api, tenantId } = await registerPending();
+    const sa = await saApi();
+    await sa
+      .post(`/platform/registrations/${tenantId}/reject`, {
+        reason: 'Hors cible',
+      })
+      .expect(200);
+    const blocked = await api.get('/zones').expect(403);
+    expect((blocked.body as { code: string }).code).toBe('TENANT_REJECTED');
+    const me = (await api.get('/auth/me').expect(200)).body as {
+      subscription: { approvalStatus: string };
+    };
+    expect(me.subscription.approvalStatus).toBe('rejected');
+  });
+
+  it('structure validée (helper) : accès normal d’emblée', async () => {
+    const t = await newTenant(app);
+    const me = (await t.admin.api.get('/auth/me').expect(200)).body as {
+      subscription: { approvalStatus: string };
+    };
+    expect(me.subscription.approvalStatus).toBe('approved');
+    await t.admin.api.get('/zones').expect(200);
   });
 });

@@ -5,7 +5,10 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module';
+import { DbService } from '../src/common/db.service';
+import { Tenant } from '../src/entities';
 import { RedisService } from '../src/common/redis.service';
+import { SubscriptionsService } from '../src/subscriptions/subscriptions.service';
 
 export const PASSWORD = 'Password123!';
 
@@ -197,6 +200,10 @@ export async function newTenant(
   };
   const admin = { id: me.user.id, email, api };
 
+  // Depuis la validation des inscriptions, une structure arrive « en attente » : en test,
+  // l'éditeur la valide aussitôt (et son essai démarre) pour que les scénarios se déroulent.
+  await approveTenant(app, me.user.tenantId);
+
   return {
     tenantId: me.user.tenantId,
     admin,
@@ -238,6 +245,24 @@ export async function newTenant(
       await api.patch('/settings', patch).expect(200);
     },
   };
+}
+
+/** Valide une structure comme le ferait l'éditeur : activée et essai lancé (14 jours). */
+export async function approveTenant(
+  app: INestApplication<App>,
+  tenantId: string,
+): Promise<void> {
+  const db = app.get(DbService);
+  const subs = app.get(SubscriptionsService);
+  await db.runAsSystem(async () => {
+    await db.manager.update(
+      Tenant,
+      { id: tenantId },
+      { approvalStatus: 'approved', approvedAt: new Date() },
+    );
+    // Démarre l'essai avec la durée réglée par la plateforme (comme la vraie validation).
+    await subs.beginTrial(tenantId);
+  });
 }
 
 /** Rectangle GeoJSON [ouest, sud, est, nord]. */

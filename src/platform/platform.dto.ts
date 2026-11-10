@@ -284,6 +284,13 @@ export class OnboardingPackageDto {
   @IsInt()
   @Min(0)
   price: number;
+
+  /** Réduction standard de l'éditeur sur ce forfait (0–100 %). */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(100)
+  discountPercent?: number;
 }
 
 /**
@@ -674,4 +681,35 @@ export class RejectOnboardingDto {
   @IsNotEmpty()
   @MaxLength(300)
   reason: string;
+}
+
+export class RegistrationsQuery {
+  /** pending (par défaut) : inscriptions à valider ; all : toutes */
+  @IsOptional()
+  @IsIn(['pending', 'all'])
+  status?: 'pending' | 'all';
+}
+
+export class RejectRegistrationDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(300)
+  reason: string;
+}
+
+/**
+ * Validation d'une structure : la mise en place obligatoire est appliquée automatiquement.
+ * L'éditeur peut choisir le forfait (sinon le premier du catalogue) et ajuster la réduction en %
+ * pour cette structure (sinon la réduction standard du forfait).
+ */
+export class ApproveRegistrationDto {
+  @IsOptional()
+  @Matches(/^[a-z0-9][a-z0-9-]{1,29}$/)
+  packageCode?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(100)
+  discountPercent?: number;
 }

@@ -15,6 +15,7 @@ import {
   Feature,
   InvoiceStatus,
   missingRequirement,
+  onboardingNetPrice,
   PlanCode,
   Role,
   SubscriptionStatus,
@@ -57,6 +58,7 @@ import {
   ListTenantsQuery,
   OneTimeChargeDto,
   OnboardingRequestsQuery,
+  ApproveRegistrationDto,
   AcceptOnboardingDto,
   MfaDisableDto,
   PlatformLoginDto,
@@ -424,6 +426,134 @@ export class PlatformService {
       body: `Votre demande « ${request.packageName} » n’est pas retenue : ${reason.trim()}`,
     });
     return m.findOneByOrFail(OnboardingRequest, { id });
+  }
+
+  // ---------------------------------------------- validation des inscriptions
+
+  /** Structures en attente de validation (et toutes, avec le filtre), + compteur du badge. */
+  async registrations(query: { status?: 'pending' | 'all' }) {
+    const m = this.db.manager;
+    const items = await m.query<Record<string, unknown>[]>(
+      `SELECT t.id AS "tenantId", t.name AS "tenantName", t.contact_phone AS "contactPhone",
+              t.approval_status AS "approvalStatus", t.created_at AS "createdAt",
+              t.approved_at AS "approvedAt", t.rejection_reason AS "rejectionReason",
+              nullif(trim(coalesce(u.first_name, '') || ' ' || coalesce(u.last_name, '')), '') AS "adminName",
+              u.email AS "adminEmail", u.phone AS "adminPhone"
+       FROM tenants t
+       LEFT JOIN LATERAL (
+         SELECT first_name, last_name, email, phone FROM users
+         WHERE tenant_id = t.id AND role = 'admin' ORDER BY email LIMIT 1
+       ) u ON true
+       WHERE ($1::text = 'all' OR t.approval_status = 'pending')
+       ORDER BY (t.approval_status = 'pending') DESC, t.created_at DESC
+       LIMIT 100`,
+      [query.status ?? 'pending'],
+    );
+    const [{ pending }] = await m.query<{ pending: number }[]>(
+      `SELECT count(*)::int AS pending FROM tenants WHERE approval_status = 'pending'`,
+    );
+    return { items, pending };
+  }
+
+  private async pendingTenant(id: string): Promise<Tenant> {
+    const tenant = await this.db.manager.findOneBy(Tenant, { id });
+    if (!tenant) throw notFound('Structure');
+    if (tenant.approvalStatus !== 'pending')
+      throw conflict(
+        'TENANT_NOT_PENDING',
+        'Cette structure a déjà été traitée',
+      );
+    return tenant;
+  }
+
+  /**
+   * Validation : la structure est activée et son essai démarre. La mise en place obligatoire est
+   * ajoutée d'office à sa première facture (forfait choisi ou premier du catalogue, au prix réduit
+   * du pourcentage du forfait, ou de celui indiqué pour cette structure). Ses administrateurs sont
+   * prévenus.
+   */
+  async approveRegistration(
+    admin: PlatformUser,
+    id: string,
+    dto: ApproveRegistrationDto = {},
+  ) {
+    const tenant = await this.pendingTenant(id);
+    const settings = await this.settings();
+    const pkg = dto.packageCode
+      ? settings.onboardingPackages.find((p) => p.code === dto.packageCode)
+      : settings.onboardingPackages[0];
+    if (dto.packageCode && !pkg) throw notFound('Forfait de mise en place');
+
+    await this.db.manager.update(
+      Tenant,
+      { id },
+      {
+        approvalStatus: 'approved',
+        approvedAt: new Date(),
+        approvedBy: admin.id,
+        rejectionReason: null,
+      },
+    );
+    await this.subscriptions.beginTrial(id);
+
+    // Mise en place obligatoire : sur la première facture (sauf offerte à 100 %, ou aucun forfait).
+    let charge: OneTimeCharge | null = null;
+    if (pkg) {
+      const discount = dto.discountPercent ?? pkg.discountPercent ?? 0;
+      const amount = onboardingNetPrice(pkg.price, discount);
+      if (amount > 0) {
+        charge = await this.db.manager.save(OneTimeCharge, {
+          tenantId: id,
+          label: `Mise en place : ${pkg.name}`,
+          amount,
+          packageCode: pkg.code,
+          note: discount > 0 ? `Réduction de ${discount}%` : null,
+          createdBy: admin.id,
+          invoiceId: null,
+        });
+      }
+    }
+
+    await this.log(admin, 'tenant.approve', id, {
+      name: tenant.name,
+      packageCode: pkg?.code ?? null,
+      amount: charge?.amount ?? 0,
+    });
+    const body = charge
+      ? `Votre compte PerformX est validé : votre essai commence maintenant. Les frais de mise en place (${formatAmount(charge.amount, settings.currency)}) figureront sur votre première facture. Bienvenue !`
+      : 'Votre compte PerformX est validé : votre essai commence maintenant. Bienvenue !';
+    this.notifyAdmins(id, {
+      type: 'account.approved',
+      title: 'Votre structure est activée',
+      body,
+    });
+    return this.tenant(id);
+  }
+
+  /** Refus : la structure reste bloquée, le motif est transmis à ses administrateurs. */
+  async rejectRegistration(admin: PlatformUser, id: string, reason: string) {
+    const tenant = await this.pendingTenant(id);
+    await this.db.manager.update(
+      Tenant,
+      { id },
+      {
+        approvalStatus: 'rejected',
+        rejectionReason: reason.trim(),
+        approvedAt: null,
+        approvedBy: admin.id,
+      },
+    );
+    this.subscriptions.invalidate(id);
+    await this.log(admin, 'tenant.reject', id, {
+      name: tenant.name,
+      reason: reason.trim(),
+    });
+    this.notifyAdmins(id, {
+      type: 'account.rejected',
+      title: 'Inscription non retenue',
+      body: `Votre inscription n’a pas été retenue : ${reason.trim()}`,
+    });
+    return this.tenant(id);
   }
 
   /** Frais pas encore facturés : retirés. */
@@ -1232,12 +1362,15 @@ export class PlatformService {
     const m = this.db.manager;
     if (dto.planCode && !(await m.findOneBy(Plan, { code: dto.planCode })))
       throw conflict('PLAN_UNAVAILABLE', 'Cette formule n’existe pas');
-    const user = await this.auth.createTenant({
-      ...dto,
-      contactPhone: dto.contactPhone
-        ? (normalizePhone(dto.contactPhone) ?? dto.contactPhone)
-        : null,
-    });
+    const user = await this.auth.createTenant(
+      {
+        ...dto,
+        contactPhone: dto.contactPhone
+          ? (normalizePhone(dto.contactPhone) ?? dto.contactPhone)
+          : null,
+      },
+      { approved: true },
+    );
     const tenantId = user.tenantId;
     // Cliente directement : formule choisie, pas d'essai.
     if (dto.planCode) {

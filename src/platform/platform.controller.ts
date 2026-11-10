@@ -34,6 +34,9 @@ import {
   OnboardingRequestsQuery,
   AcceptOnboardingDto,
   RejectOnboardingDto,
+  RegistrationsQuery,
+  RejectRegistrationDto,
+  ApproveRegistrationDto,
   PhotoAiBonusDto,
   PlatformSubscriptionDto,
   RecordPaymentDto,
@@ -269,6 +272,34 @@ export class PlatformController {
     @Body() dto: RejectOnboardingDto,
   ) {
     return this.platform.rejectOnboarding(admin, id, dto.reason);
+  }
+
+  // ------------------------------------------- validation des inscriptions
+
+  @Get('registrations')
+  registrations(@Query() query: RegistrationsQuery) {
+    return this.platform.registrations(query);
+  }
+
+  /** Valider une inscription : la structure est activée et son essai démarre. */
+  @Post('registrations/:id/approve')
+  @HttpCode(200)
+  approveRegistration(
+    @CurrentAdmin() admin: PlatformUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ApproveRegistrationDto,
+  ) {
+    return this.platform.approveRegistration(admin, id, dto);
+  }
+
+  @Post('registrations/:id/reject')
+  @HttpCode(200)
+  rejectRegistration(
+    @CurrentAdmin() admin: PlatformUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RejectRegistrationDto,
+  ) {
+    return this.platform.rejectRegistration(admin, id, dto.reason);
   }
 
   /** Frais ponctuels (mise en place) ajoutés à la prochaine facture. */
