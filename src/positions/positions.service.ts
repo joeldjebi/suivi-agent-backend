@@ -210,6 +210,8 @@ export class PositionsService {
           firstName: day.agent.firstName,
           lastName: day.agent.lastName,
           groupId: day.agent.groupId,
+          // Pour afficher la photo de profil sur la carte (null = pas de photo → initiales).
+          avatarVersion: day.agent.avatarVersion ?? null,
         },
         status: day.status,
         zoneId: day.zoneId,

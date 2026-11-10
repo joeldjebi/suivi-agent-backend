@@ -2898,7 +2898,8 @@ describe('Positions et carte en temps réel (RG-11, RG-12)', () => {
       status: 'active',
       zoneId: zone.id,
       signalLost: false,
-      agent: { id: agent.id },
+      // La carte reçoit la version de la photo (null sans photo → initiales).
+      agent: { id: agent.id, avatarVersion: null },
       position: {
         lat: OUTSIDE.lat,
         outsideZone: true,
