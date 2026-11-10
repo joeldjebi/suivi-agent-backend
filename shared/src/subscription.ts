@@ -23,6 +23,22 @@ export const SubscriptionStatus = {
 } as const;
 export type SubscriptionStatus = (typeof SubscriptionStatus)[keyof typeof SubscriptionStatus];
 
+/** Validation d'une structure par l'éditeur avant son activation. */
+export const TenantApprovalStatus = {
+  /** Inscrite, en attente de validation par l'éditeur (accès bloqué) */
+  Pending: 'pending',
+  Approved: 'approved',
+  /** Refusée par l'éditeur (accès bloqué) */
+  Rejected: 'rejected',
+} as const;
+export type TenantApprovalStatus =
+  (typeof TenantApprovalStatus)[keyof typeof TenantApprovalStatus];
+export const TENANT_APPROVAL_STATUS_LABELS: Record<TenantApprovalStatus, string> = {
+  pending: 'En attente',
+  approved: 'Validée',
+  rejected: 'Refusée',
+};
+
 export const BillingCycle = {
   Monthly: 'monthly',
   /** Engagement de 12 mois, remise sur chaque facture mensuelle */
@@ -83,12 +99,24 @@ export const ONBOARDING_REQUEST_STATUS_LABELS: Record<OnboardingRequestStatus, s
   cancelled: 'Annulée',
 };
 
-/** Forfait de mise en place proposé par l'éditeur (formation, import, configuration). */
+/**
+ * Forfait de mise en place (formation, import, configuration). Obligatoire : appliqué
+ * automatiquement à l'activation d'une structure par l'éditeur. L'éditeur peut lui donner une
+ * réduction standard en pourcentage (modifiable au cas par cas à la validation).
+ */
 export interface OnboardingPackage {
   code: string;
   name: string;
   description: string;
   price: number;
+  /** Réduction standard de l'éditeur sur ce forfait, en pourcentage (0–100 ; 100 = offert). */
+  discountPercent?: number;
+}
+
+/** Prix net d'une mise en place après réduction (arrondi), borné à 0–100 %. */
+export function onboardingNetPrice(price: number, discountPercent = 0): number {
+  const d = Math.min(100, Math.max(0, discountPercent));
+  return Math.round(price * (1 - d / 100));
 }
 
 /**

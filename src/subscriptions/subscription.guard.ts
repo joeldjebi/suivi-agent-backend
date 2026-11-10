@@ -1,6 +1,6 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { Feature, SubscriptionStatus } from '@suivi/shared';
+import { Feature, SubscriptionStatus, TenantApprovalStatus } from '@suivi/shared';
 import type { Request } from 'express';
 import type { AuthUser } from '../common/auth-user';
 import { ALLOW_SUSPENDED, REQUIRES_FEATURE } from '../common/decorators';
@@ -8,6 +8,7 @@ import {
   SubscriptionsService,
   featureNotInPlan,
   subscriptionSuspended,
+  tenantNotApproved,
 } from './subscriptions.service';
 
 /**
@@ -28,10 +29,17 @@ export class SubscriptionGuard implements CanActivate {
     if (!user) return true; // route publique
     const targets = [context.getHandler(), context.getClass()];
     const summary = await this.subscriptions.summary(user.tenantId);
+    const allowSuspended = this.reflector.getAllAndOverride<boolean>(
+      ALLOW_SUSPENDED,
+      targets,
+    );
+    // Structure pas encore validée (ou refusée) par l'éditeur : accès bloqué (sauf l'authentification).
     if (
-      summary.status === SubscriptionStatus.Suspended &&
-      !this.reflector.getAllAndOverride<boolean>(ALLOW_SUSPENDED, targets)
-    ) {
+      summary.approvalStatus !== TenantApprovalStatus.Approved &&
+      !allowSuspended
+    )
+      throw tenantNotApproved(summary.approvalStatus);
+    if (summary.status === SubscriptionStatus.Suspended && !allowSuspended) {
       throw subscriptionSuspended();
     }
     const required = this.reflector.getAllAndOverride<Feature[] | undefined>(

@@ -6,31 +6,26 @@ import {
   Feature,
   InvoiceLineKind,
   InvoiceStatus,
-  OnboardingRequestStatus,
   PHOTO_AI_LOT_SIZE,
   PlanCode,
   Role,
   SubscriptionStatus,
+  TenantApprovalStatus,
 } from '@suivi/shared';
 import type { InvoiceLine } from '@suivi/shared';
-import {
-  BusinessException,
-  conflict,
-  notFound,
-} from '../common/business.exception';
+import { BusinessException, conflict } from '../common/business.exception';
 import { DbService } from '../common/db.service';
 import type { NotificationInput } from '../common/notifications.service';
 import {
   Invoice,
   OneTimeCharge,
-  OnboardingRequest,
   Plan,
   PlatformSettings,
   Subscription,
+  Tenant,
   TenantSettings,
 } from '../entities';
-import type { AuthUser } from '../common/auth-user';
-import type { ChangePlanDto, OnboardingRequestDto } from './subscriptions.dto';
+import type { ChangePlanDto } from './subscriptions.dto';
 
 const DAY = 86400_000;
 /** Les administrateurs sont prévenus de la fin de l'ancien tarif ce nombre de jours avant. */
@@ -44,6 +39,8 @@ export interface SubscriptionSummary {
   planName: string;
   billingCycle: BillingCycle;
   trialEndsAt: Date | null;
+  /** Validation par l'éditeur : accès bloqué tant que ce n'est pas « approved ». */
+  approvalStatus: TenantApprovalStatus;
   /** Fonctionnalités ouvertes maintenant (toutes pendant l'essai, aucune si suspendu) */
   features: Feature[];
   /** Formule la moins chère qui inclut chaque fonctionnalité absente (proposition de changement) */
@@ -182,6 +179,17 @@ export const subscriptionSuspended = () =>
     'L’abonnement de votre structure est suspendu. Contactez votre administrateur.',
   );
 
+export const tenantNotApproved = (status: TenantApprovalStatus) =>
+  new BusinessException(
+    HttpStatus.FORBIDDEN,
+    status === TenantApprovalStatus.Rejected
+      ? 'TENANT_REJECTED'
+      : 'TENANT_PENDING',
+    status === TenantApprovalStatus.Rejected
+      ? 'L’inscription de votre structure a été refusée.'
+      : 'Votre structure est en attente de validation par l’éditeur.',
+  );
+
 /** Abonnement des structures : formule, essai, engagement annuel, factures mensuelles. */
 @Injectable()
 export class SubscriptionsService {
@@ -233,15 +241,36 @@ export class SubscriptionsService {
   }
 
   /** Abonnement d'une nouvelle structure : essai gratuit, puis la formule choisie par l'éditeur. */
-  async startTrial(tenantId: string): Promise<void> {
+  /**
+   * Crée l'abonnement d'essai d'une nouvelle structure. Si `start` est faux (inscription en
+   * attente de validation), l'essai n'est pas encore lancé : le compteur démarre à la validation
+   * (voir beginTrial).
+   */
+  async startTrial(tenantId: string, start = true): Promise<void> {
     const platform = await this.platform();
     await this.db.manager.insert(Subscription, {
       tenantId,
       planCode: platform.defaultPlanCode,
       billingCycle: BillingCycle.Monthly,
       status: SubscriptionStatus.Trialing,
-      trialEndsAt: new Date(Date.now() + platform.trialDays * DAY),
+      trialEndsAt: start
+        ? new Date(Date.now() + platform.trialDays * DAY)
+        : null,
     });
+  }
+
+  /** Lance le compteur d'essai au moment où l'éditeur valide la structure. */
+  async beginTrial(tenantId: string): Promise<void> {
+    const platform = await this.platform();
+    await this.db.manager.update(
+      Subscription,
+      { tenantId },
+      {
+        status: SubscriptionStatus.Trialing,
+        trialEndsAt: new Date(Date.now() + platform.trialDays * DAY),
+      },
+    );
+    this.invalidate(tenantId);
   }
 
   /** Résumé pour le contrôle d'accès et le profil (/auth/me), mis en cache. */
@@ -252,6 +281,12 @@ export class SubscriptionsService {
     const value = await this.db.runAsTenant(
       tenantId,
       async (): Promise<SubscriptionSummary> => {
+        const tenant = await this.db.manager.findOne(Tenant, {
+          where: { id: tenantId },
+          select: { approvalStatus: true },
+        });
+        const approvalStatus =
+          tenant?.approvalStatus ?? TenantApprovalStatus.Approved;
         const sub = await this.db.manager.findOneBy(Subscription, {
           tenantId,
         });
@@ -263,6 +298,7 @@ export class SubscriptionsService {
             planName: 'Entreprise',
             billingCycle: BillingCycle.Monthly,
             trialEndsAt: null,
+            approvalStatus,
             features: ALL_FEATURES,
             upgrades: {},
           };
@@ -274,6 +310,7 @@ export class SubscriptionsService {
           planName: plan?.name ?? sub.planCode,
           billingCycle: sub.billingCycle,
           trialEndsAt: sub.trialEndsAt,
+          approvalStatus,
           features,
           upgrades: this.upgradesFrom(plans, features),
         };
@@ -438,68 +475,6 @@ export class SubscriptionsService {
 
   async invoices(): Promise<Invoice[]> {
     return this.db.manager.find(Invoice, { order: { month: 'DESC' } });
-  }
-
-  // ------------------------------------------------------------ mise en place
-
-  /** Demandes de mise en place de la structure courante, les plus récentes d'abord. */
-  onboardingRequests(): Promise<OnboardingRequest[]> {
-    return this.db.manager.find(OnboardingRequest, {
-      where: { tenantId: this.db.tenantId },
-      order: { createdAt: 'DESC' },
-      take: 20,
-    });
-  }
-
-  /**
-   * Demande d'un forfait de mise en place proposé par l'éditeur (nom et prix figés à cet
-   * instant). Une seule demande en attente à la fois.
-   */
-  async requestOnboarding(user: AuthUser, dto: OnboardingRequestDto) {
-    const pkg = (await this.platform()).onboardingPackages.find(
-      (p) => p.code === dto.packageCode,
-    );
-    if (!pkg) throw notFound('Forfait de mise en place');
-    const m = this.db.manager;
-    const pending = await m.findOneBy(OnboardingRequest, {
-      tenantId: this.db.tenantId,
-      status: OnboardingRequestStatus.Pending,
-    });
-    if (pending)
-      throw conflict(
-        'ONBOARDING_REQUEST_PENDING',
-        `Votre demande « ${pending.packageName} » attend déjà une réponse`,
-      );
-    return m.save(OnboardingRequest, {
-      tenantId: this.db.tenantId,
-      packageCode: pkg.code,
-      packageName: pkg.name,
-      packagePrice: pkg.price,
-      message: dto.message?.trim() || null,
-      status: OnboardingRequestStatus.Pending,
-      requestedBy: user.id,
-    });
-  }
-
-  /** La structure retire sa demande tant que l'éditeur n'a pas répondu. */
-  async cancelOnboarding(id: string) {
-    const m = this.db.manager;
-    const request = await m.findOneBy(OnboardingRequest, {
-      id,
-      tenantId: this.db.tenantId,
-    });
-    if (!request) throw notFound('Demande');
-    if (request.status !== OnboardingRequestStatus.Pending)
-      throw conflict(
-        'ONBOARDING_REQUEST_DECIDED',
-        'L’éditeur a déjà répondu à cette demande',
-      );
-    await m.update(
-      OnboardingRequest,
-      { id },
-      { status: OnboardingRequestStatus.Cancelled, decidedAt: new Date() },
-    );
-    return m.findOneByOrFail(OnboardingRequest, { id });
   }
 
   /**
