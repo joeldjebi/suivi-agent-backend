@@ -80,6 +80,7 @@ services:
         VITE_PLATFORM_PATH: ${VITE_PLATFORM_PATH:-}
         VITE_TILE_URL: ${VITE_TILE_URL:-}
         VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
+        VITE_TURNSTILE_SITE_KEY: ${VITE_TURNSTILE_SITE_KEY:-}
     restart: unless-stopped
     logging: *logging
     ports:
