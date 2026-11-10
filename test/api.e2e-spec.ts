@@ -49,6 +49,7 @@ import {
   YOPOUGON,
 } from './helpers';
 import { PushService, type PushMessage } from '../src/common/push.service';
+import { DbService } from '../src/common/db.service';
 import {
   AppVersionService,
   compareVersions,
@@ -3274,6 +3275,51 @@ describe('Notifications push', () => {
     } finally {
       push.transport = null;
     }
+  });
+
+  it('push_devices : la RLS isole les téléphones entre structures, la réattribution d’un jeton reste possible', async () => {
+    const a = await newTenant(app, 'Alpha');
+    const b = await newTenant(app, 'Beta');
+    const tokenA = `alpha-${'a'.repeat(30)}`;
+    const tokenShared = `partage-${'s'.repeat(28)}`;
+    await a.admin.api
+      .post('/devices', { token: tokenA, platform: 'android' })
+      .expect(204);
+    await a.admin.api
+      .post('/devices', { token: tokenShared, platform: 'android' })
+      .expect(204);
+
+    const db = app.get(DbService);
+    // Dans le contexte de la structure A, la RLS ne montre que ses téléphones.
+    const seenByA = await db.runAsTenant(a.tenantId, () =>
+      db.manager.query<{ token: string }[]>(
+        `SELECT token FROM push_devices ORDER BY token`,
+      ),
+    );
+    expect(seenByA.map((r) => r.token).sort()).toEqual(
+      [tokenA, tokenShared].sort(),
+    );
+
+    // La structure B ne voit aucun téléphone de A.
+    const seenByB = await db.runAsTenant(b.tenantId, () =>
+      db.manager.query<{ token: string }[]>(`SELECT token FROM push_devices`),
+    );
+    expect(seenByB).toEqual([]);
+
+    // Téléphone partagé : B se connecte dessus, le jeton lui est réattribué (franchit
+    // volontairement la frontière entre structures ; échouerait si l'enregistrement
+    // restait soumis à la RLS).
+    await b.admin.api
+      .post('/devices', { token: tokenShared, platform: 'android' })
+      .expect(204);
+    const stillA = await db.runAsTenant(a.tenantId, () =>
+      db.manager.query<{ token: string }[]>(`SELECT token FROM push_devices`),
+    );
+    expect(stillA.map((r) => r.token)).toEqual([tokenA]);
+    const nowB = await db.runAsTenant(b.tenantId, () =>
+      db.manager.query<{ token: string }[]>(`SELECT token FROM push_devices`),
+    );
+    expect(nowB.map((r) => r.token)).toEqual([tokenShared]);
   });
 });
 
