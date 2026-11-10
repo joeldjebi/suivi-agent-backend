@@ -21,7 +21,10 @@ import { normalizeFooter, sanitizeLanding } from './landing.sanitize';
 
 /** Image du site : 2 Mo au plus (PNG, JPEG, WebP). */
 export const MAX_ASSET_BYTES = 2 * 1024 * 1024;
-/** Le site public est mis en cache une minute (vidé à chaque publication). */
+/** Le contenu publié du site est mis en cache une minute (vidé à chaque publication).
+ * Les formules et réglages (prix, essai, forfaits) ne sont PAS mis en cache ici : ils
+ * sont relus à chaque requête (les formules via le cache de l'abonnement, vidé dès que
+ * l'éditeur change un réglage), pour que le site public reflète aussitôt les réglages. */
 const CACHE_MS = 60_000;
 /** Demandes de démo par adresse IP et par heure. */
 const DEMO_PER_HOUR = 5;
@@ -38,7 +41,7 @@ interface LandingRow {
 /** Site vitrine : contenu (brouillon, publication), images et demandes de démo. */
 @Injectable()
 export class LandingService {
-  private cache: { at: number; value: PublicLanding } | null = null;
+  private contentCache: { at: number; value: LandingContent } | null = null;
 
   constructor(
     private readonly db: DbService,
@@ -69,14 +72,17 @@ export class LandingService {
 
   // -------------------------------------------------------------- public
 
-  /** Site publié (ou contenu d'origine), avec les formules proposées du catalogue. */
+  /** Site publié (ou contenu d'origine), avec les formules proposées du catalogue.
+   * Seul le contenu publié est mis en cache ; les formules et réglages sont toujours
+   * relus, pour qu'un changement de réglage par l'éditeur apparaisse aussitôt. */
   async publicLanding(): Promise<PublicLanding> {
-    if (this.cache && Date.now() - this.cache.at < CACHE_MS)
-      return this.cache.value;
-    const row = await this.row();
-    const value = await this.withCatalog(row.published ?? DEFAULT_LANDING);
-    this.cache = { at: Date.now(), value };
-    return value;
+    let content = this.contentCache;
+    if (!content || Date.now() - content.at >= CACHE_MS) {
+      const row = await this.row();
+      content = { at: Date.now(), value: row.published ?? DEFAULT_LANDING };
+      this.contentCache = content;
+    }
+    return this.withCatalog(content.value);
   }
 
   private async withCatalog(content: LandingContent): Promise<PublicLanding> {
@@ -201,7 +207,7 @@ export class LandingService {
        WHERE id = 1`,
       [JSON.stringify(draft), admin.email],
     );
-    this.db.afterCommit(() => (this.cache = null));
+    this.db.afterCommit(() => (this.contentCache = null));
     await this.log(admin, 'landing.publish');
     return this.editor();
   }

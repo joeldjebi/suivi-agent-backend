@@ -9702,6 +9702,48 @@ describe('Site vitrine modulable par l’éditeur', () => {
     await new Api(app).put('/platform/landing', { content: draft }).expect(401);
   });
 
+  it('réglages changés par l’éditeur : le site public se met à jour sans republier', async () => {
+    const plans = () =>
+      new Api(app)
+        .get('/public/landing')
+        .expect(200)
+        .then((r) => r.body as Body);
+    // Cache du site public réchauffé avec les valeurs d'origine.
+    const before = await plans();
+    const advancedBefore = (before.plans as Body[]).find(
+      (p) => p.code === 'advanced',
+    )!.monthlyPrice as number;
+    expect(before.trialDays).toBe(14);
+
+    // Prix d'une formule changé dans les réglages — sans republier la vitrine.
+    await sa
+      .patch('/platform/plans/advanced', {
+        monthlyPrice: advancedBefore + 1000,
+      })
+      .expect(200);
+    const afterPlan = await plans();
+    expect(
+      (afterPlan.plans as Body[]).find((p) => p.code === 'advanced')!
+        .monthlyPrice,
+    ).toBe(advancedBefore + 1000);
+
+    // Durée d'essai changée dans les réglages : visible aussitôt sur le site public.
+    await sa.patch('/platform/settings', { trialDays: 30 }).expect(200);
+    expect((await plans()).trialDays).toBe(30);
+
+    // Valeurs d'origine remises en place.
+    await sa
+      .patch('/platform/plans/advanced', { monthlyPrice: advancedBefore })
+      .expect(200);
+    await sa.patch('/platform/settings', { trialDays: 14 }).expect(200);
+    const restored = await plans();
+    expect(restored.trialDays).toBe(14);
+    expect(
+      (restored.plans as Body[]).find((p) => p.code === 'advanced')!
+        .monthlyPrice,
+    ).toBe(advancedBefore);
+  });
+
   it('images du site : envoi, utilisation, refus des fichiers qui ne sont pas des images', async () => {
     const png = Buffer.from(
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
