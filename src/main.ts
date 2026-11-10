@@ -1,11 +1,15 @@
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import helmet from 'helmet';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { initMonitoring } from './common/monitoring';
+import { assertSecureConfig } from './common/secure-config';
 
 async function bootstrap() {
+  // Refuse de démarrer en production si un réglage de sécurité manque (CORS, secrets).
+  assertSecureConfig();
   initMonitoring();
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   // Envois volumineux mais légitimes (import, assistant de démarrage avec beaucoup d'agents).
@@ -19,6 +23,16 @@ async function bootstrap() {
       Number(process.env.TRUST_PROXY) || process.env.TRUST_PROXY,
     );
 
+  // En-têtes de sécurité HTTP. La CSP du site est posée par Nginx sur la page (l'API ne
+  // sert que du JSON) ; HSTS est géré par Apache (terminaison TLS) pour ne pas poser deux
+  // fois l'en-tête ; l'app mobile et la SPA appellent l'API depuis une autre origine.
+  app.use(
+    helmet({
+      contentSecurityPolicy: false,
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+      hsts: false,
+    }),
+  );
   app.setGlobalPrefix('api');
   app.enableCors({ origin: process.env.CORS_ORIGIN?.split(',') ?? true });
   app.useGlobalPipes(

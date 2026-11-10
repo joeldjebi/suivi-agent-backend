@@ -18,7 +18,9 @@ import type { JwtPayload } from '../auth/jwt.strategy';
  * Chaque client rejoint sa salle personnelle ; les administrateurs suivent toute la structure,
  * les chefs d'équipe leurs groupes.
  */
-@WebSocketGateway({ cors: { origin: true } })
+@WebSocketGateway({
+  cors: { origin: process.env.CORS_ORIGIN?.split(',') ?? true },
+})
 export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
   private readonly logger = new Logger(RealtimeGateway.name);
 
