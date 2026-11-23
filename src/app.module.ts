@@ -49,6 +49,7 @@ import { PayrollModule } from './payroll/payroll.module';
 import { PlatformModule } from './platform/platform.module';
 import { LandingModule } from './landing/landing.module';
 import { PresentationsModule } from './presentations/presentations.module';
+import { ProspectsModule } from './prospects/prospects.module';
 import { SupervisionModule } from './supervision/supervision.module';
 import { SettingsModule } from './settings/settings.module';
 import { StatsModule } from './stats/stats.module';
@@ -120,6 +121,7 @@ import { TurnstileGuard } from './common/turnstile.guard';
     PlatformModule,
     LandingModule,
     PresentationsModule,
+    ProspectsModule,
     SupervisionModule,
     BrandingModule,
     RealtimeModule,
