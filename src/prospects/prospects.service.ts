@@ -18,11 +18,12 @@ export class ProspectsService {
 
   async list(query: ListProspectsDto) {
     const page = Math.max(1, query.page ?? 1);
-    const limit = Math.min(100, Math.max(1, query.limit ?? 30));
+    const limit = Math.min(200, Math.max(1, query.limit ?? 50));
     return this.db.runAsSystem(async () => {
       const qb = this.db.manager
         .createQueryBuilder(Prospect, 'p')
-        .orderBy('p.updated_at', 'DESC')
+        .orderBy('p.prioritaire', 'DESC')
+        .addOrderBy('p.updated_at', 'DESC')
         .skip((page - 1) * limit)
         .take(limit);
       if (query.statut) qb.andWhere('p.statut = :statut', { statut: query.statut });
@@ -34,13 +35,18 @@ export class ProspectsService {
         );
       const [items, total] = await qb.getManyAndCount();
 
-      const rows = await this.db.manager.query<{ statut: string; n: string }[]>(
+      const statutRows = await this.db.manager.query<{ statut: string; n: string }[]>(
         `SELECT statut, count(*)::int AS n FROM prospects GROUP BY statut`,
       );
       const counts: Record<string, number> = {};
-      for (const r of rows) counts[r.statut] = Number(r.n);
+      for (const r of statutRows) counts[r.statut] = Number(r.n);
 
-      return { items, total, page, limit, counts };
+      const paysRows = await this.db.manager.query<{ pays: string }[]>(
+        `SELECT DISTINCT pays FROM prospects WHERE pays IS NOT NULL ORDER BY pays`,
+      );
+      const paysListe = paysRows.map((r) => r.pays);
+
+      return { items, total, page, limit, counts, paysListe };
     });
   }
 
@@ -52,7 +58,12 @@ export class ProspectsService {
     return this.db.runAsSystem(async () => {
       const existing = await this.db.manager.findOneBy(Prospect, { id });
       if (!existing) throw new NotFoundException('Prospect introuvable');
-      return this.db.manager.save(Prospect, { ...existing, ...dto });
+      const merged = { ...existing, ...dto } as Prospect;
+      // Dernier contact : renseigné dès qu'on passe à un statut « contacté ».
+      if (dto.statut && dto.statut !== 'a_contacter' && dto.statut !== existing.statut) {
+        merged.dernierContact = new Date();
+      }
+      return this.db.manager.save(Prospect, merged);
     });
   }
 

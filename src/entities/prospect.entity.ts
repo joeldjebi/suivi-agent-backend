@@ -42,9 +42,35 @@ export class Prospect {
   @Column({ type: 'text', nullable: true })
   canal: string | null;
 
+  @Column({ type: 'text', nullable: true })
+  site: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  facebook: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  instagram: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  linkedin: string | null;
+
+  @Column({ default: false })
+  prioritaire: boolean;
+
   @Index()
   @Column({ type: 'text', default: 'a_contacter' })
   statut: string;
+
+  /** Prochaine action prévue (relance…) : date + libellé. */
+  @Column({ name: 'prochaine_action_date', type: 'date', nullable: true })
+  prochaineActionDate: string | null;
+
+  @Column({ name: 'prochaine_action_note', type: 'text', nullable: true })
+  prochaineActionNote: string | null;
+
+  /** Date du dernier contact établi (renseignée au passage « contacté »). */
+  @Column({ name: 'dernier_contact', type: 'timestamptz', nullable: true })
+  dernierContact: Date | null;
 
   @Column({ type: 'text', nullable: true })
   notes: string | null;

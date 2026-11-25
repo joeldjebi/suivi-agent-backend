@@ -17,6 +17,7 @@ import { PlatformAdmin, PlatformAudit } from './platform.entity';
 import { RefreshToken } from './refresh-token.entity';
 import { IpIntel } from './ip-intel.entity';
 import { Prospect, ProspectTemplate } from './prospect.entity';
+import { VideoView } from './video-view.entity';
 import { SecurityEvent } from './security-event.entity';
 import {
   Invoice,
@@ -47,6 +48,7 @@ export {
   IpIntel,
   Prospect,
   ProspectTemplate,
+  VideoView,
   PlatformAdmin,
   PlatformAudit,
   PayAdjustment,
@@ -87,6 +89,7 @@ export const ENTITIES = [
   IpIntel,
   Prospect,
   ProspectTemplate,
+  VideoView,
   PlatformAdmin,
   PlatformAudit,
   PayAdjustment,

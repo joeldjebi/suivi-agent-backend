@@ -1,4 +1,6 @@
 import {
+  IsBoolean,
+  IsDateString,
   IsIn,
   IsInt,
   IsOptional,
@@ -11,11 +13,11 @@ import { Type } from 'class-transformer';
 export const PROSPECT_STATUTS = [
   'a_contacter',
   'contacte',
-  'relance',
-  'interesse',
+  'a_relancer',
   'rdv',
-  'gagne',
-  'perdu',
+  'demo',
+  'client',
+  'pas_interesse',
 ] as const;
 
 export class ListProspectsDto {
@@ -46,105 +48,36 @@ export class ListProspectsDto {
   limit?: number;
 }
 
-export class SaveProspectDto {
+class ProspectFields {
+  @IsOptional() @IsString() @MaxLength(120) secteur?: string | null;
+  @IsOptional() @IsString() @MaxLength(80) pays?: string | null;
+  @IsOptional() @IsString() @MaxLength(120) ville?: string | null;
+  @IsOptional() @IsString() @MaxLength(160) contactNom?: string | null;
+  @IsOptional() @IsString() @MaxLength(60) telephone?: string | null;
+  @IsOptional() @IsString() @MaxLength(200) email?: string | null;
+  @IsOptional() @IsString() @MaxLength(60) canal?: string | null;
+  @IsOptional() @IsString() @MaxLength(300) site?: string | null;
+  @IsOptional() @IsString() @MaxLength(300) facebook?: string | null;
+  @IsOptional() @IsString() @MaxLength(300) instagram?: string | null;
+  @IsOptional() @IsString() @MaxLength(300) linkedin?: string | null;
+  @IsOptional() @IsBoolean() prioritaire?: boolean;
+  @IsOptional() @IsIn(PROSPECT_STATUTS) statut?: string;
+  @IsOptional() @IsDateString() prochaineActionDate?: string | null;
+  @IsOptional() @IsString() @MaxLength(500) prochaineActionNote?: string | null;
+  @IsOptional() @IsString() @MaxLength(4000) notes?: string | null;
+}
+
+export class SaveProspectDto extends ProspectFields {
   @IsString()
   @MaxLength(200)
   entreprise: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(120)
-  secteur?: string | null;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(80)
-  pays?: string | null;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(120)
-  ville?: string | null;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(160)
-  contactNom?: string | null;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(60)
-  telephone?: string | null;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(200)
-  email?: string | null;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(60)
-  canal?: string | null;
-
-  @IsOptional()
-  @IsIn(PROSPECT_STATUTS)
-  statut?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(4000)
-  notes?: string | null;
 }
 
-export class UpdateProspectDto {
+export class UpdateProspectDto extends ProspectFields {
   @IsOptional()
   @IsString()
   @MaxLength(200)
   entreprise?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(120)
-  secteur?: string | null;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(80)
-  pays?: string | null;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(120)
-  ville?: string | null;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(160)
-  contactNom?: string | null;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(60)
-  telephone?: string | null;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(200)
-  email?: string | null;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(60)
-  canal?: string | null;
-
-  @IsOptional()
-  @IsIn(PROSPECT_STATUTS)
-  statut?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(4000)
-  notes?: string | null;
 }
 
 export class UpdateTemplateDto {

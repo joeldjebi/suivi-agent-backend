@@ -50,6 +50,7 @@ import { PlatformModule } from './platform/platform.module';
 import { LandingModule } from './landing/landing.module';
 import { PresentationsModule } from './presentations/presentations.module';
 import { ProspectsModule } from './prospects/prospects.module';
+import { VideoModule } from './video/video.module';
 import { SupervisionModule } from './supervision/supervision.module';
 import { SettingsModule } from './settings/settings.module';
 import { StatsModule } from './stats/stats.module';
@@ -122,6 +123,7 @@ import { TurnstileGuard } from './common/turnstile.guard';
     LandingModule,
     PresentationsModule,
     ProspectsModule,
+    VideoModule,
     SupervisionModule,
     BrandingModule,
     RealtimeModule,
